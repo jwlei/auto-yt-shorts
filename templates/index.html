@@ -79,7 +79,10 @@
     <h1>🎬 Auto YT Shorts</h1>
     <p class="sub" style="margin-bottom:6px">Pick your options, press Generate, and watch it work. Finished videos appear at the bottom.</p>
   </div>
-  {% if protected %}<a href="{{ url_for('logout') }}">Sign out</a>{% endif %}
+  <div style="display:flex;gap:14px;align-items:center">
+    <a href="#" id="shutdown" title="Stops the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
+    {% if protected %}<a href="{{ url_for('logout') }}">Sign out</a>{% endif %}
+  </div>
 </div>
 
 <div class="card">
@@ -451,6 +454,14 @@ $('comfyStart').addEventListener('click', async () => {
   $('comfyText').textContent = 'ComfyUI: starting… (takes ~30s)';
   await fetch('/comfyui/start', { method: 'POST' });
   setTimeout(() => { $('comfyStart').disabled = false; poll(); }, 3000);
+});
+
+$('shutdown').addEventListener('click', async e => {
+  e.preventDefault();
+  if (!confirm('Shut down the control panel? Start it again with start_webapp.pyw or the AutoShorts shortcut.')) return;
+  const body = await (await fetch('/shutdown', { method: 'POST' })).json();
+  if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }
+  document.body.innerHTML = '<div class="wrap"><h1>Auto YT Shorts</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>AutoShorts</b> shortcut.</p></div>';
 });
 
 loadForm();

@@ -207,16 +207,22 @@ style, YouTube upload and privacy, advanced flags) with a hint under each, a
 API errors, and the videos in `0_output` (ready to upload) and `1_uploaded` to
 play or download.
 
-### Windows: one-click shortcut
+### Windows: one click
+
+Double-click **`start_webapp.pyw`** in the project folder. It starts the panel's
+server in the background (no console window; its output goes to
+`logs/webapp.log`) and opens the panel in your default browser. If the server
+is already running it just opens the browser. Stop the server with **Shut down**
+at the top of the panel.
+
+For a Desktop / Start menu shortcut that does the same, run once:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\create_shortcut.ps1
 ```
 
-This puts an **AutoShorts** shortcut on the Desktop and in the Start menu. Clicking
-it starts the server in a minimised console window (close that window to stop
-it) and opens the panel in your browser. The server listens on your home
-network, so the panel also prints the address to open on your phone. Set
+The server listens on your home network, so the panel also shows the address
+to open on your phone. Set
 `COMFYUI_LAUNCHER` (e.g. `C:\ComfyUI\run_nvidia_gpu.bat`) in `.env` to get the
 "Start ComfyUI" button.
 

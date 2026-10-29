@@ -7,7 +7,7 @@ whether ComfyUI is up, surfaces recent API errors, and lists the finished
 the desktop or a phone on the same network.
 
     python webapp.py --host 0.0.0.0 --port 8800
-    (or double-click the "AutoShorts" desktop shortcut: scripts/start_webapp.ps1)
+    (or double-click start_webapp.pyw / the "AutoShorts" desktop shortcut)
 
 Set APP_PASSWORD to expose it beyond localhost. Without it the server refuses
 any host but 127.0.0.1: an open instance lets anyone burn your Gemini and
@@ -40,6 +40,9 @@ load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOLDERS = {"output": OUTPUT_DIR, "uploaded": UPLOADED_DIR}
+# Keeps the pipeline and nvidia-smi from flashing a console window when the
+# server itself runs windowless (start_webapp.pyw).
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 API_ERROR_LOG = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
 
 # Gemini voices only: edge-tts is never used.
@@ -102,6 +105,7 @@ class Job:
                 bufsize=1,
                 # Unbuffered child output, otherwise the log only appears at the end.
                 env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **(env or {})},
+                creationflags=NO_WINDOW,
             )
 
         threading.Thread(target=self._drain, daemon=True).start()
@@ -360,6 +364,7 @@ def gpu_stats():
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu",
              "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5,
+            creationflags=NO_WINDOW,
         ).stdout.strip().splitlines()[0]
         util, used, total, power, temp = [x.strip() for x in out.split(",")]
         _gpu_cache["value"] = {"util": int(float(util)), "mem_used": round(float(used) / 1024, 1),
@@ -534,6 +539,17 @@ def stop():
     return {"ok": job.stop()}
 
 
+@app.route("/shutdown", methods=["POST"])
+@password_required
+def shutdown():
+    """Stops the server itself: started from start_webapp.pyw it has no window to close."""
+    if job.running:
+        return {"ok": False, "error": "A run is in progress. Stop it first."}, 409
+    # Reply first, then exit, so the browser gets its answer.
+    threading.Timer(0.5, os._exit, args=(0,)).start()
+    return {"ok": True}
+
+
 @app.route("/comfyui/start", methods=["POST"])
 @password_required
 def start_comfyui():
@@ -611,7 +627,7 @@ def main():
     print(f"🌐 This PC:    http://127.0.0.1:{args.port}")
     if args.host == "0.0.0.0":
         print(f"📱 Your phone: http://{lan_ip()}:{args.port}  (or http://{socket.gethostname()}.local:{args.port})")
-    print("   Close this window to stop the server.")
+    print("   Stop it with 'Shut down' in the panel (or close this window if it has one).")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 
