@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 from modules.brain import ContentBrain
 from modules.asset_manager import AssetManager, PROVIDER_KEYS, get_provider
 from modules.audio import AudioEngine, get_tts_provider
-from modules.avatar_generator import AVATAR_CLIP_COUNTS, AvatarGenerator, default_avatar_clips, get_avatar_source
+from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
+                                      get_avatar_source, plan_avatar_scenes)
 from modules.composer import Composer
 from modules.paths import move_to_uploaded
 
@@ -96,7 +97,7 @@ def preflight(args=None):
 
     avatar = os.path.join(os.getcwd(), "assets", "avatar", "avatars.mp4")
     try:
-        default_avatar_clips()
+        default_avatar_layout()
         avatar_source = get_avatar_source()
     except RuntimeError as e:
         problems.append(str(e))
@@ -177,27 +178,42 @@ async def generate_one(args):
     # 4. COMPOSER: Merge Video + Audio
     composer = Composer()
 
-    # 4a. AVATAR: Render presenter clips for the hook + two middle scenes, or just
-    # the two middle scenes with --avatar-clips 2 (ComfyUI)
-    avatar_count = getattr(args, 'avatar_clips', None)
-    if avatar_count is None:
-        avatar_count = default_avatar_clips()
-    avatar_clips = None
+    # 4a. AVATAR: Decide which scenes show the presenter now that we know what
+    # stock footage we have. 'auto' (default) opens on the avatar and uses 3-5
+    # avatar scenes, more when the LLM rates the footage a poor fit.
     stage("Avatar clips", upload)
-    if get_avatar_source() == "comfyui" and avatar_count:
-        indices = composer.pick_avatar_indices(script, avatar_count)
+    layout = getattr(args, 'avatar_clips', None) or default_avatar_layout()
+    source = get_avatar_source()
+    has_static = os.path.exists(composer.avatar_path)
+    generator = None
+    if source == "comfyui" and layout != "0":
         try:
-            avatar_clips = AvatarGenerator().generate(script, indices, brain)
+            generator = AvatarGenerator()
         except Exception as e:
             print(f"❌ Avatar Error: {e}")
-            avatar_clips = {}
-        # A failed render still gets an avatar if the static clip exists; otherwise stock footage.
-        for i in indices:
-            if i not in avatar_clips and os.path.exists(composer.avatar_path):
-                avatar_clips[i] = composer.avatar_path
+
+    indices = []
+    if layout != "0" and (generator or has_static):
+        if layout == "auto":
+            eligible = [i for i, scene in enumerate(script)
+                        if generator is None or generator.can_render(scene)]
+            indices = plan_avatar_scenes(script, brain.rate_footage_fit(script), eligible)
+        else:
+            indices = composer.pick_avatar_indices(script, int(layout))
+
+    avatar_clips = {}
+    if indices and generator:
+        try:
+            avatar_clips = generator.generate(script, indices, brain)
+        except Exception as e:
+            print(f"❌ Avatar Error: {e}")
+    # A failed render still gets an avatar if the static clip exists; otherwise stock footage.
+    for i in indices:
+        if i not in avatar_clips and has_static:
+            avatar_clips[i] = composer.avatar_path
 
     stage("Rendering scenes", upload)
-    final_scene_paths = composer.render_all_scenes(script, assets_map, avatar_clips, avatar_count)
+    final_scene_paths = composer.render_all_scenes(script, assets_map, avatar_clips)
 
     # 5. STITCH WITH TRANSITIONS
     if not final_scene_paths:
@@ -294,9 +310,10 @@ def parse_args(argv=None):
     parser.add_argument("--upload", action="store_true", help="Upload each finished video to YouTube.")
     parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default="private",
                         help="Privacy status for uploads (default: private).")
-    parser.add_argument("--avatar-clips", type=int, choices=AVATAR_CLIP_COUNTS,
-                        help="3 = open on the avatar plus two middle scenes; 2 = two middle scenes only; 0 = no avatar "
-                             "(default: AVATAR_CLIPS from .env, else 3).")
+    parser.add_argument("--avatar-clips", choices=AVATAR_LAYOUTS,
+                        help="auto = open on the avatar, 3-5 avatar scenes in total, more where the stock footage "
+                             "fits the narration badly; 3 = open on it + two middle scenes; 2 = two middle scenes "
+                             "only; 0 = no avatar (default: AVATAR_CLIPS from .env, else auto).")
 
     args = parser.parse_args(argv)
     if args.runs < 1:

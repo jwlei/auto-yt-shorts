@@ -128,11 +128,12 @@
     <div class="section-title">Avatar (presenter)</div>
     <label for="avatar_clips">When she appears</label>
     <select id="avatar_clips" name="avatar_clips">
+      <option value="auto">Auto — opens the video, 3–5 clips, more where stock footage is weak</option>
       <option value="3">Opens the video + 2 middle scenes (3 clips)</option>
       <option value="2">2 middle scenes only (2 clips)</option>
       <option value="0">No avatar — stock footage only</option>
     </select>
-    <div class="hint">The opening scene is the hook, so starting on the presenter builds recognition. Each clip adds ~4–5 min of GPU time.</div>
+    <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage — a random 3 or 4 scenes, up to 5 when the footage is poor. The opening (hook) scene is always her. Each clip adds ~4–5 min of GPU time, so auto adds ~15–25 min per video.</div>
 
     <div id="avatarOpts">
       <div class="row">
@@ -242,7 +243,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const STORE_KEY = 'autoshorts.form';
+const STORE_KEY = 'autoshorts.form.v2';  // v2: avatar layout gained 'auto' as the default
 let autoScroll = true;
 let folder = 'output';
 let lastVideos = { output: [], uploaded: [] };
@@ -327,7 +328,7 @@ const STAGE_HINTS = {
   'Topic & script': 'Gemini is picking the topic and writing the scenes.',
   'Voice': 'Gemini TTS is reading the whole script in one take, then it is cut into scenes.',
   'Stock footage': 'Downloading two stock clips per scene.',
-  'Avatar clips': 'ComfyUI is generating the presenter clips on your GPU — the slowest step (~4–5 min per clip).',
+  'Avatar clips': 'Rating the stock footage, picking the presenter scenes, then ComfyUI generates each clip on your GPU — the slowest step (~4–5 min per clip).',
   'Rendering scenes': 'ffmpeg is combining each scene’s footage with its voice.',
   'Stitching': 'Joining the scenes with transitions into the final video.',
   'Upload': 'Writing the title and description, then uploading to YouTube.',

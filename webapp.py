@@ -425,7 +425,7 @@ def index():
         phone_url=f"http://{lan_ip()}:{port}",
         defaults={
             "avatar_source": (os.getenv("AVATAR_SOURCE") or "static").lower(),
-            "avatar_clips": os.getenv("AVATAR_CLIPS") or "3",
+            "avatar_clips": (os.getenv("AVATAR_CLIPS") or "auto").lower(),
         },
         static_avatar=os.path.exists(os.path.join(PROJECT_ROOT, "assets", "avatar", "avatars.mp4")),
     )
@@ -460,8 +460,8 @@ def build_run(form):
     if voice:
         argv += ["--voice", voice]
 
-    clips = form.get("avatar_clips") or "3"
-    if clips not in ("0", "2", "3"):
+    clips = form.get("avatar_clips") or "auto"
+    if clips not in ("auto", "0", "2", "3"):
         return None, None, "Unknown avatar layout."
     argv += ["--avatar-clips", clips]
 

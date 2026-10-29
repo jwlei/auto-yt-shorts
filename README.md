@@ -17,7 +17,7 @@ Automated faceless YouTube Shorts: AI script, natural narration, stock footage a
 - **Pro Transitions:** Randomly applies `xfade` (fade, slide, wipes) between scenes.
 - **Silence Removal:** Automatically trims dead air from AI voice generation.
 
-- **Avatar Injection:** Opens on your presenter and brings her back in two random middle scenes (or middle scenes only with `--avatar-clips 2`) to build channel brand identity — optionally generated and lip-synced with ComfyUI.
+- **Avatar Injection:** Opens on your presenter and brings her back for 3-5 scenes in total, giving her the scenes where the stock footage fits the narration worst (Gemini rates the footage once it is downloaded) — generated and lip-synced with ComfyUI.
 - **Windows Ready:** Includes specific FFmpeg flags (`yuv420p`, `faststart`) to prevent corruption errors (`0x80004005`) on Windows Media Player.
 
 ---
@@ -106,7 +106,8 @@ Required:
 
 Optional:
 
-- `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota)
+- `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota or stops answering)
+- `GEMINI_TIMEOUT` seconds to wait for a text reply before moving on to the next model (default `90`); a model that times out or runs out of daily quota is skipped for the rest of the run
 - `VIDEO_PROVIDER` to pick the stock video source: `pixabay` (default) or `pexels`
 - `TTS_PROVIDER` to pick the voice engine: `gemini` (default, natural) or `edge` (free, more robotic)
 - `GEMINI_TTS_VOICE` to always use a specific Gemini voice (browse the voice library with `client.voices.list(language_code=["en-GB"])`)
@@ -118,7 +119,7 @@ Optional:
 
 ### 5. Optional: Generated Avatar Clips (ComfyUI)
 
-With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default the video **opens on the avatar** (the hook) and she appears in two more middle scenes — 3 clips. `--avatar-clips 2` (or `AVATAR_CLIPS=2`) keeps the original layout of two middle scenes only.
+With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default (`auto`) the video **opens on the avatar** (the hook) and she appears in 3-5 scenes in total. The scenes are picked **after** the stock footage is downloaded: Gemini rates 0-10 how well each scene's footage matches its line, the total starts at a random 3 or 4 and rises (up to 5) for every scene with poor footage (rated 4 or lower, or nothing found), and the weakest-footage scenes go to the avatar first, the rest at random weighted towards weaker footage. Fixed layouts are still available: `--avatar-clips 3` (hook + two random middle scenes), `2` (two middle scenes only) or `0` (none).
 
 The presenter is **lip-synced** to the narration: each scene's voiceover is fed into the workflow and LTX generates her mouth and face to match it. Gemini writes a prompt for each clip that has her say the line to camera.
 
@@ -128,7 +129,7 @@ The presenter is **lip-synced** to the narration: each scene's voiceover is fed 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AVATAR_CLIPS` | `3` | `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
+| `AVATAR_CLIPS` | `auto` | `auto` = hook + 3-5 scenes chosen by footage fit; `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
 | `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI server (from Docker use `http://host.docker.internal:8188`) |
 | `COMFYUI_WORKFLOW` | `comfyui/avatar_lipsync.json` | API workflow; its map is the same name with `.map.json` |
 | `AVATAR_REFERENCE_IMAGE` | — | Persona image. Every clip is image-to-video from it, so the persona is the same in every video |
@@ -187,7 +188,7 @@ python main.py --voice en-gb-storyteller-2 --output daily_short.mp4
 | `--check` | Run preflight checks (ffmpeg, API keys, avatar) and exit. |
 | `--upload` | Upload each finished video to YouTube (see below). |
 | `--privacy` | `private` (default), `unlisted`, or `public` for uploads. |
-| `--avatar-clips` | `3` (default: hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
+| `--avatar-clips` | `auto` (default: hook + 3-5 scenes, more where the stock footage fits badly), `3` (hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
 
 Schedule a daily short with cron:
 
@@ -361,7 +362,7 @@ python main.py --runs 3 --upload             # batch, each one uploaded
 - **Input:** Audio files + Video files.
 - **Logic:**
 - **Scene Processing:** Cuts the scene duration in half. Plays Video A for the first half, Video B for the second half.
-- **Avatar Injection:** Puts the Avatar on the hook (scene 1) plus two random "middle" scenes (not the outro) — or only the two middle scenes with `--avatar-clips 2` — replacing the stock footage with your Avatar loop, or with lip-synced clips from `avatar_generator.py` when `AVATAR_SOURCE=comfyui`.
+- **Avatar Injection:** Puts the Avatar on the scenes chosen by the avatar plan (see *Generated Avatar Clips*), replacing the stock footage with your Avatar loop, or with lip-synced clips from `avatar_generator.py` when `AVATAR_SOURCE=comfyui`.
 - **Stitching:** Merges all scenes using `xfade` transitions (wipes, slides).
 - **Rendering:** Exports as `yuv420p` H.264 MP4 with `faststart` flags for maximum compatibility.
 

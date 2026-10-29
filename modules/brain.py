@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import threading
 import time
 from google import genai
 from dotenv import load_dotenv
@@ -55,24 +56,66 @@ def _retry_delay(error):
     # Cap it: a daily quota reports delays no run should sit and wait out.
     return min(float(match.group(1)) + 1, MAX_RETRY_WAIT)
 
+# A text reply normally takes a few seconds. A model that says nothing for this
+# long is overloaded or stuck (it happens, with no error at all), so move on.
+DEFAULT_TIMEOUT = 90
+
+# Models that timed out or used up their daily quota in this process: later calls
+# skip them instead of waiting on them again.
+_skipped_models = set()
+
+
+def _call_with_deadline(fn, seconds):
+    """
+    Runs fn, raising TimeoutError if it has not returned within `seconds`. The
+    SDK can sit on a silent request (or a long retry-after) indefinitely, so the
+    call runs in a daemon thread that is simply abandoned if it hangs.
+    """
+    result = {}
+
+    def target():
+        try:
+            result["value"] = fn()
+        except BaseException as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        raise TimeoutError(f"no response within {seconds}s")
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
 def _generate(prompt, retries=4):
     """
     Calls Gemini, waiting out the overload and per-minute rate limits that a
-    scheduled run hits regularly. A model whose daily quota is used up (or that
-    keeps failing) hands over to the next model in the chain. Raises once every
-    model has failed.
+    scheduled run hits regularly. A model whose daily quota is used up, that
+    doesn't answer within GEMINI_TIMEOUT, or that keeps failing hands over to the
+    next model in the chain. Raises once every model has failed.
     """
     client = _get_client()
+    timeout = int(os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT)
     errors = []
 
     for model in _get_models():
+        if model in _skipped_models:
+            continue
         for attempt in range(retries):
             try:
-                return client.models.generate_content(model=model, contents=prompt)
+                return _call_with_deadline(
+                    lambda: client.models.generate_content(model=model, contents=prompt), timeout)
             except Exception as e:
                 log_api_error("Gemini", model, e)
+                if isinstance(e, TimeoutError):
+                    print(f"   ⚠️ {model} did not answer within {timeout}s. Trying the next model...")
+                    _skipped_models.add(model)
+                    break
                 if is_daily_quota(e):
                     print(f"   ⚠️ {model} has used its daily quota. Trying the next model...")
+                    _skipped_models.add(model)
                     break
                 if attempt == retries - 1 or not _is_retryable(e):
                     break
@@ -294,6 +337,52 @@ class ContentBrain:
             print(f"   ⚠️ Avatar prompt failed ({e}). Using a generic reaction.")
             return fallback
         return text or fallback
+
+    def rate_footage_fit(self, script_data):
+        """
+        Asks the LLM how well the stock footage found for each scene matches what
+        the narration says. Returns {scene index: 0-10}; scenes where nothing was
+        found are 0. If the model misbehaves every scene gets a neutral 5, so the
+        avatar plan falls back to plain random picks.
+        """
+        fits, lines = {}, []
+        for i, scene in enumerate(script_data):
+            footage = scene.get('footage') or []
+            found = [f for f in footage if f.get('found')]
+            if not found:
+                fits[i] = 0
+                continue
+            clips = "; ".join(f'searched "{f["query"]}" -> got "{f["found"]}"' for f in found)
+            lines.append(f'{scene["id"]}. "{scene["text"]}" | {clips}')
+
+        if lines:
+            prompt = f"""
+    You are the editor of a YouTube Short. For each scene below you get the narration line and
+    the stock clips that were found for it (what was searched, and the found clip's tags/title).
+
+    Rate 0-10 how well the found footage illustrates THIS line for a viewer:
+    10 = shows exactly what is being said; 5 = loosely related / generic; 0 = unrelated or misleading.
+    Judge the found clip, not the search term. Be strict: generic filler footage is a 3-4.
+
+    Scenes:
+    {chr(10).join(lines)}
+
+    Return ONLY strict JSON: [{{"id": 1, "fit": 7}}, ...]
+    """
+            try:
+                rated = json.loads(_generate(prompt).text.replace('```json', '').replace('```', '').strip())
+                by_id = {int(r["id"]): max(0, min(10, int(r["fit"]))) for r in rated if isinstance(r, dict)}
+                for i, scene in enumerate(script_data):
+                    if i not in fits:
+                        fits[i] = by_id.get(scene["id"], 5)
+            except Exception as e:
+                print(f"   ⚠️ Footage rating failed ({e}). Treating all footage as an average fit.")
+                for i in range(len(script_data)):
+                    fits.setdefault(i, 5)
+
+        summary = ", ".join(f"{script_data[i]['id']}: {fits[i]}" for i in sorted(fits))
+        print(f"🧠 Stock footage fit (scene: 0-10): {summary}")
+        return fits
 
     @staticmethod
     def _sanitize(script_data):

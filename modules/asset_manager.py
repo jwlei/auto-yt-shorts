@@ -47,8 +47,9 @@ class AssetManager:
         os.makedirs(self.cache_dir, exist_ok=True)
 
     # --- Provider APIs ---
-    # Each returns a list of candidates: {"duration", "width", "height", "url"},
-    # or None on API errors.
+    # Each returns a list of candidates: {"duration", "width", "height", "url", "tags"},
+    # or None on API errors. "tags" describes what the clip shows, so the LLM can
+    # judge whether it actually fits the narration.
 
     def _search_pexels(self, query):
         params = {
@@ -69,8 +70,12 @@ class AssetManager:
             video_files = sorted(video.get("video_files", []), key=lambda x: (x.get("width") or 0) * (x.get("height") or 0), reverse=True)
             if video_files:
                 best = video_files[0]
+                # Pexels has no tags; its page URL slug is the clip's title
+                # (".../video/woman-walking-on-the-beach-856971/").
+                slug = video.get("url", "").rstrip("/").rsplit("/", 1)[-1]
+                tags = " ".join(w for w in slug.split("-") if not w.isdigit())
                 candidates.append({"duration": video.get("duration", 0), "width": best.get("width") or 0,
-                                   "height": best.get("height") or 0, "url": best["link"]})
+                                   "height": best.get("height") or 0, "url": best["link"], "tags": tags})
         return candidates
 
     def _search_pixabay(self, query):
@@ -98,7 +103,8 @@ class AssetManager:
                 rendition = renditions.get(name) or {}
                 if rendition.get("url"):
                     candidates.append({"duration": video.get("duration", 0), "width": rendition.get("width", 0),
-                                       "height": rendition.get("height", 0), "url": rendition["url"]})
+                                       "height": rendition.get("height", 0), "url": rendition["url"],
+                                       "tags": video.get("tags", "")})
                     break
         return candidates
 
@@ -123,7 +129,7 @@ class AssetManager:
     def search_video(self, query, duration_min=4):
         """
         Searches the configured provider for a portrait video matching the query.
-        Returns the download URL or None.
+        Returns the chosen candidate ({"url", "tags", ...}) or None.
         """
         print(f"   🔍 Searching {self.label} for: '{query}'...")
 
@@ -151,7 +157,7 @@ class AssetManager:
                 valid_videos = pool # Fallback to whatever exists
 
             # Randomize selection
-            return random.choice(valid_videos)["url"]
+            return random.choice(valid_videos)
 
         except Exception as e:
             print(f"      ❌ Error searching {self.label}: {e}")
@@ -161,7 +167,12 @@ class AssetManager:
         """
         Downloads the video content to a local file.
         """
-        save_path = os.path.join(self.assets_dir, filename)
+        # The URL's hash is part of the name, so a cached file is only reused for
+        # the same clip — never for a different video's scene of the same number
+        # left behind by a run that failed before cleanup.
+        stem, ext = os.path.splitext(filename)
+        url_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
+        save_path = os.path.join(self.assets_dir, f"{stem}_{url_hash}{ext}")
 
         # Caching strategy
         if os.path.exists(save_path):
@@ -182,6 +193,8 @@ class AssetManager:
         """
         NEW LOGIC: Downloads TWO videos per scene (A and B).
         Returns a list of tuples: [(path_a, path_b), (path_a, path_b), ...]
+        Also records what was searched and found on each scene as
+        scene['footage'] = [{"query", "found"}, ...] ("found" is None when nothing was).
         """
         print(f"🎥 Starting Double-Feature Video Download ({self.label})...")
         video_pairs = []
@@ -195,16 +208,21 @@ class AssetManager:
             query_b = scene.get('visual_2', query_a) # Use A if B is missing
 
             # 2. Search & Download Clip A
-            url_a = self.search_video(query_a)
+            clip_a = self.search_video(query_a)
             path_a = None
-            if url_a:
-                path_a = self.download_video(url_a, f"scene_{scene_id}_a.mp4")
+            if clip_a:
+                path_a = self.download_video(clip_a["url"], f"scene_{scene_id}_a.mp4")
 
             # 3. Search & Download Clip B
-            url_b = self.search_video(query_b)
+            clip_b = self.search_video(query_b)
             path_b = None
-            if url_b:
-                path_b = self.download_video(url_b, f"scene_{scene_id}_b.mp4")
+            if clip_b:
+                path_b = self.download_video(clip_b["url"], f"scene_{scene_id}_b.mp4")
+
+            scene['footage'] = [
+                {"query": query_a, "found": (clip_a.get("tags") or "untitled clip") if path_a else None},
+                {"query": query_b, "found": (clip_b.get("tags") or "untitled clip") if path_b else None},
+            ]
 
             # 4. Fallback Logic (Self-Healing)
             # If B fails, use A twice. If A fails, use B twice.

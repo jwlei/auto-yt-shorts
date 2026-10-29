@@ -33,17 +33,65 @@ SEED_INPUTS = ("seed", "noise_seed")
 POLL_INTERVAL = 5
 
 
-# How many scenes show the avatar: 3 opens on it (hook + two middle scenes), 2 is middle scenes only, 0 is none.
-AVATAR_CLIP_COUNTS = (0, 2, 3)
-DEFAULT_AVATAR_CLIPS = 3
+# Which scenes show the avatar:
+#   auto - opens on it, then 3-5 avatar scenes in total, picked after the stock
+#          footage is in: scenes whose footage fits the narration badly go to the avatar
+#   3    - opens on it + two random middle scenes
+#   2    - two random middle scenes only
+#   0    - none
+AVATAR_LAYOUTS = ("auto", "3", "2", "0")
+DEFAULT_AVATAR_LAYOUT = "auto"
+AUTO_MIN, AUTO_MAX = 3, 5
+# Footage rated at or below this (0-10) counts as a poor fit and pulls in the avatar.
+POOR_FIT = 4
 
 
-def default_avatar_clips():
-    """Returns AVATAR_CLIPS from .env, or raises if it is not 0, 2 or 3."""
-    value = (os.getenv("AVATAR_CLIPS") or str(DEFAULT_AVATAR_CLIPS)).strip()
-    if value not in {str(n) for n in AVATAR_CLIP_COUNTS}:
-        raise RuntimeError(f"AVATAR_CLIPS='{value}' is not supported. Use 0, 2 or 3.")
-    return int(value)
+def default_avatar_layout():
+    """Returns AVATAR_CLIPS from .env, or raises if it is not a known layout."""
+    value = (os.getenv("AVATAR_CLIPS") or DEFAULT_AVATAR_LAYOUT).strip().lower()
+    if value not in AVATAR_LAYOUTS:
+        raise RuntimeError(f"AVATAR_CLIPS='{value}' is not supported. Use one of: {', '.join(AVATAR_LAYOUTS)}.")
+    return value
+
+
+def plan_avatar_scenes(script_data, fits, eligible):
+    """
+    Picks the avatar scenes for the 'auto' layout. Returns sorted scene indices.
+
+    - The hook (scene 1) always opens on the avatar.
+    - The total starts at a random 3 or 4; every scene with poor footage (fit <=
+      POOR_FIT, or none found) beyond that raises it, up to 5.
+    - Poorest-fitting scenes are taken first; the rest are drawn at random,
+      weighted towards weaker footage, so videos don't all look the same.
+
+    fits: {index: 0-10} from ContentBrain.rate_footage_fit.
+    eligible: indices the avatar can cover (lip-synced clips can't run past the clip cap).
+    """
+    eligible = [i for i in eligible if i < len(script_data)]
+    if not eligible:
+        return []
+
+    poor = sorted((i for i in eligible if i != 0 and fits.get(i, 5) <= POOR_FIT), key=lambda i: fits.get(i, 5))
+    base = random.randint(AUTO_MIN, AUTO_MAX - 1)
+    count = min(AUTO_MAX, max(base, 1 + len(poor)), len(eligible))
+
+    chosen = [0] if 0 in eligible else []
+    for i in poor:
+        if len(chosen) >= count:
+            break
+        chosen.append(i)
+
+    rest = [i for i in eligible if i not in chosen]
+    while len(chosen) < count and rest:
+        pick = random.choices(rest, weights=[11 - fits.get(i, 5) for i in rest])[0]
+        chosen.append(pick)
+        rest.remove(pick)
+
+    chosen.sort()
+    weak = sum(1 for i in chosen if fits.get(i, 5) <= POOR_FIT)
+    print(f"🎲 Avatar plan: {len(chosen)} scenes {[script_data[i]['id'] for i in chosen]} "
+          f"({weak} replace weak footage, base {base})")
+    return chosen
 
 
 def get_avatar_source():
@@ -123,6 +171,10 @@ class AvatarGenerator:
         if "prompt" not in fields:
             raise RuntimeError(f"{map_path} must map 'prompt' to the positive prompt input.")
         return workflow, fields
+
+    def can_render(self, scene):
+        """A lip-synced clip must cover the whole line; looping it would desync the mouth."""
+        return not self.lipsync or math.ceil(scene.get('duration', 0) + 0.5) <= self.max_seconds
 
     def is_reachable(self):
         try:
