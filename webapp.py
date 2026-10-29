@@ -35,6 +35,7 @@ from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR
+from modules.topic_history import read_history
 
 load_dotenv()
 
@@ -199,6 +200,11 @@ def list_videos(folder):
     if not os.path.isdir(directory):
         return []
 
+    try:
+        topics = {entry.get("video"): entry["topic"] for entry in read_history()}
+    except (OSError, ValueError):
+        topics = {}  # A broken history only costs the topic captions
+
     videos = []
     for name in os.listdir(directory):
         if not name.endswith(".mp4"):
@@ -206,6 +212,7 @@ def list_videos(folder):
         stat = os.stat(os.path.join(directory, name))
         videos.append({
             "name": name,
+            "topic": topics.get(name),
             "size_mb": round(stat.st_size / (1024 * 1024), 1),
             "created": datetime.fromtimestamp(stat.st_mtime).strftime("%d/%m %H:%M"),
             "mtime": stat.st_mtime,
@@ -470,6 +477,7 @@ def index():
             "avatar_clips": (os.getenv("AVATAR_CLIPS") or "auto").lower(),
         },
         static_avatar=os.path.exists(os.path.join(PROJECT_ROOT, "assets", "avatar", "avatars.mp4")),
+        can_upload=youtube_configured(),
     )
 
 
@@ -637,6 +645,35 @@ def video(folder, name):
 @password_required
 def download(folder, name):
     return send_file(safe_video_path(folder, name), as_attachment=True, download_name=name)
+
+
+def youtube_configured():
+    return all(os.getenv(k) for k in ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"))
+
+
+@app.route("/publish", methods=["POST"])
+@password_required
+def publish():
+    """Uploads one video from 0_output (form 'video'), or all of them, as a run."""
+    privacy = request.form.get("privacy") or "private"
+    if privacy not in ("private", "unlisted", "public"):
+        return {"ok": False, "error": "Unknown privacy setting."}, 400
+    if not youtube_configured():
+        return {"ok": False, "error": "Set the YouTube keys in .env first (run authorize_youtube.py once)."}, 400
+
+    argv = [sys.executable, "publish.py", "--privacy", privacy]
+    name = request.form.get("video")
+    if name:
+        argv.append(os.path.basename(safe_video_path("output", name)))
+        topic = (request.form.get("topic") or "").strip()
+        if topic:
+            argv += ["--topic", topic]
+    else:
+        argv.append("--all")
+
+    if not job.start(argv):
+        return {"ok": False, "error": "A run is already in progress."}, 409
+    return {"ok": True}
 
 
 @app.route("/delete/<folder>/<path:name>", methods=["POST"])

@@ -205,12 +205,20 @@ Schedule a daily short with cron:
 `webapp.py` is the control panel for the whole pipeline, on the desktop or your
 phone: every option (topic, number of videos, language, voice, avatar layout and
 style, YouTube upload and privacy, advanced flags) with a hint under each, a
-"Check setup" button, a live log, ComfyUI status, recent API errors, and the
-videos in `0_output` (ready to upload) and `1_uploaded` to play or download.
-On desktop, the options sit on the left and a run card on the right keeps
-Generate, ComfyUI status, progress and the log on the same screen.
+"Check setup" button, a live log, ComfyUI status, recent API errors, and a
+carousel of the videos in `0_output` (Ready) and `1_uploaded` (Uploaded). Each
+ready video has **Upload** and **Delete**; **Upload all** sends every ready video
+(uploads use the privacy picked under Publish). On a desktop at least 1280px
+wide the options, the run card (Generate, ComfyUI, progress, log) and the
+portrait videos sit in three columns on one screen.
 
-Every successfully created video records its topic and filename in
+Uploads from the panel run `publish.py`, which you can also use directly:
+`python publish.py short_20261029_233100.mp4 --privacy unlisted` or
+`python publish.py --all`. Gemini writes the title, description and tags from
+the video's recorded topic and narration; a video made before the topic history
+existed needs `--topic` (the panel asks for it).
+
+Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
 (`GEMINI_FAST_MODEL`) checks the new topic against that history and rejects it
 if a viewer would feel they had already seen that video (a reworded repeat

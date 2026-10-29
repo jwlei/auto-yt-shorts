@@ -290,19 +290,17 @@ class ContentBrain:
         print("❌ Script generation failed after 3 attempts.")
         return None
 
-    def generate_metadata(self, topic, script_data):
+    def generate_metadata(self, topic, narration=""):
         """
         Writes the YouTube title, description and tags for a finished short.
         Falls back to the topic itself if the model misbehaves — a weak title is
         better than a failed upload.
         """
-        narration = " ".join(scene['text'] for scene in script_data)
-
         prompt = f"""
     Write YouTube Shorts metadata for this video.
 
     Topic: {topic}
-    Narration: {narration}
+    Narration: {narration or "(not available: write from the topic)"}
 
     Rules:
     - "title": under 80 characters, curiosity-driven, no clickbait punctuation spam.

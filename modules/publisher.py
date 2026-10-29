@@ -7,6 +7,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
+from modules.paths import move_to_uploaded
+
 # Uploading is the only scope this needs. Keeping it narrow means the consent
 # screen cannot hand out read/write access to the rest of the channel.
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
@@ -120,3 +122,22 @@ class YouTubeUploader:
         url = f"https://youtube.com/shorts/{video_id}"
         print(f"✅ Uploaded: {url}")
         return url
+
+
+def publish_video(video_path, topic, narration, privacy_status, brain):
+    """
+    Has Gemini write the title, description and tags, uploads the video, and
+    moves it to 1_uploaded (0_output only holds videos still waiting to go up).
+    Returns (path, url): the url is None and the path unchanged if it failed.
+    """
+    metadata = brain.generate_metadata(topic, narration)
+    url = YouTubeUploader().upload(
+        video_path,
+        title=metadata['title'],
+        description=metadata['description'],
+        tags=metadata['tags'],
+        privacy_status=privacy_status,
+    )
+    if url:
+        video_path = move_to_uploaded(video_path)
+    return video_path, url

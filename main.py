@@ -13,7 +13,6 @@ from modules.audio import AudioEngine, get_tts_provider
 from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
                                       get_avatar_source, plan_avatar_scenes)
 from modules.composer import Composer
-from modules.paths import move_to_uploaded
 from modules.topic_history import find_exact_repeat, read_successful_topics, record_successful_topic
 
 load_dotenv()
@@ -271,25 +270,17 @@ async def generate_one(args):
     output_name = args.output if (args.output and args.runs == 1) else build_output_name()
     final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
 
+    narration = " ".join(scene['text'] for scene in script)
+
     # 6. PUBLISH (optional)
     if final_path and args.upload:
         stage("Upload", upload)
-        metadata = brain.generate_metadata(topic, script)
         try:
             # Imported here so the render-only path never needs the Google
             # client libraries installed.
-            from modules.publisher import YouTubeUploader
+            from modules.publisher import publish_video
 
-            url = YouTubeUploader().upload(
-                final_path,
-                title=metadata['title'],
-                description=metadata['description'],
-                tags=metadata['tags'],
-                privacy_status=args.privacy,
-            )
-            if url:
-                # 0_output only holds videos still waiting to go up.
-                final_path = move_to_uploaded(final_path)
+            final_path, _ = publish_video(final_path, topic, narration, args.privacy, brain)
         except Exception as e:
             # The video rendered fine; a failed upload should not discard it.
             print(f"❌ Upload Error: {e}")
@@ -299,7 +290,7 @@ async def generate_one(args):
 
     if final_path:
         try:
-            record_successful_topic(topic, final_path)
+            record_successful_topic(topic, final_path, narration)
         except OSError as e:
             raise RuntimeError(f"Video was created at {final_path}, but its topic could not be recorded: {e}") from e
 

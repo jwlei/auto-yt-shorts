@@ -31,29 +31,43 @@
   .check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
   .check .hint { margin-top: 2px; }
   .btns { display: flex; gap: 10px; }
-  .btns button { margin-top: 0; }
+  .btns button { margin-top: 0; white-space: nowrap; }
   .btns .ghost { flex: 0 0 34%; }
   .run-sep { border-top: 1px solid var(--line); margin: 14px 0 12px; }
   .sys { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: .85rem; }
   .sys .item { display: flex; align-items: center; gap: 8px; }
   .phone { font-size: .82rem; color: var(--muted); margin-top: 10px; }
   .phone code { color: var(--text); background: var(--panel-2); padding: 2px 6px; border-radius: 6px; user-select: all; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
-  .tabs button { margin: 0; padding: 9px; font-size: .85rem; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
-  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .vid { border-top: 1px solid var(--line); padding: 14px 0; }
-  .vid:first-of-type { border-top: 0; padding-top: 4px; }
-  .vid h3 { margin: 0 0 3px; font-size: .92rem; font-weight: 600; word-break: break-all; }
-  .vid .meta { color: var(--muted); font-size: .78rem; margin-bottom: 9px; }
-  video { width: 100%; max-height: 62vh; border-radius: 10px; background: #000; display: block; }
-  .acts { display: flex; gap: 9px; margin-top: 9px; }
+  .vhead { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .tabs { display: flex; gap: 6px; flex: 1 1 auto; }
+  .tabs button, .vhead > button { margin: 0; padding: 8px 10px; font-size: .82rem; white-space: nowrap; }
+  .tabs button { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+  .tabs button.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+  .vhead > button { width: auto; flex: 1 0 auto; }
+  /* One portrait video per slide; swipe, or use the arrows below. */
+  .carousel {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+  .carousel::-webkit-scrollbar { display: none; }
+  .vid { flex: 0 0 78%; min-width: 0; scroll-snap-align: center; display: flex; flex-direction: column; }
+  .vid video { width: 100%; aspect-ratio: 9 / 16; max-height: 70vh; object-fit: contain; border-radius: 10px; background: #000; display: block; }
+  .vid h3 { margin: 9px 0 2px; font-size: .9rem; font-weight: 600; line-height: 1.3; }
+  .vid .meta { color: var(--muted); font-size: .74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acts { display: flex; gap: 8px; margin-top: 9px; }
   .acts a, .acts button {
-    flex: 1; margin: 0; padding: 11px; font-size: .85rem; text-align: center;
+    flex: 1; margin: 0; padding: 10px; font-size: .85rem; text-align: center;
     text-decoration: none; border-radius: 9px; font-weight: 600;
   }
   .acts a { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
-  .acts button { background: transparent; border: 1px solid var(--line); color: var(--muted); }
-  .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; }
+  .acts .del { flex: 0 0 34%; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  .cnav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 10px; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cnav button { width: auto; margin: 0; padding: 5px 16px; font-size: 1rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; flex: 1; }
   .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
   .top .sub { margin-bottom: 6px; }
@@ -74,23 +88,24 @@
   .bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   .gpu { margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
-  /* Desktop: options on the left in two columns, and a sticky run card on the
-     right (Generate, ComfyUI, progress, log) so the controls and the status
-     share one screen. Phones keep the single column. */
+  /* Desktop: options (two columns), the run card (Generate, ComfyUI, progress,
+     log) and, from 1280px, the portrait videos on the far right, all on one
+     screen. Narrower desktops put the videos underneath. Phones keep one column. */
   @media (min-width: 1000px) {
-    .wrap { max-width: 1480px; padding: 14px 24px 32px; }
+    .wrap { max-width: 1880px; padding: 14px 20px 20px; }
     .top { align-items: baseline; margin-bottom: 12px; }
     .top .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
     .top .sub { margin: 0; }
     .dashboard {
       display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1fr);
+      grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr);
       align-items: start;
       gap: 16px;
-      margin-bottom: 16px;
     }
     .dashboard > .card { margin-bottom: 0; min-width: 0; }
-    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+    .videos-card { grid-column: 1 / -1; }
+    .vid { flex-basis: 260px; }
+    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
     #form input:not([type=checkbox]), #form select { padding: 9px 11px; font-size: .95rem; }
     #form label { margin: 9px 0 4px; }
     #form .section { margin-top: 12px; }
@@ -104,14 +119,30 @@
       max-height: calc(100vh - 28px);
       overflow: auto;
     }
-    .run-card pre.log { flex: 1 1 auto; min-height: 140px; max-height: none; }
+    .run-card pre.log { flex: 1 1 auto; min-height: 120px; max-height: none; }
+  }
+  @media (min-width: 1280px) {
+    .wrap { height: 100vh; display: flex; flex-direction: column; }
+    .dashboard {
+      flex: 1;
+      min-height: 540px;
+      grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr) minmax(260px, .75fr);
+      grid-template-rows: minmax(0, 1fr);
+      align-items: stretch;
+    }
+    .dashboard > .card { overflow: auto; }
+    .run-card { position: static; max-height: none; }
+    .videos-card { grid-column: auto; display: flex; flex-direction: column; overflow: hidden !important; }
+    .carousel { flex: 1; min-height: 0; }
+    .vid { flex-basis: 100%; }
+    .vid video { flex: 1 1 0; min-height: 0; aspect-ratio: auto; max-height: none; }
   }
 </style>
 
 <div class="top">
   <div class="title">
     <h1>🎬 Auto YT Shorts</h1>
-    <p class="sub">Pick your options, press Generate, and watch it work. Finished videos appear at the bottom.</p>
+    <p class="sub">Pick your options, press Generate, and watch it work. Finished videos wait under Ready until you upload them.</p>
   </div>
   <div style="display:flex;gap:14px;align-items:center">
     <a href="#" id="shutdown" title="Stops the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
@@ -263,24 +294,32 @@
   <div class="hint gpu" id="gpuLine"></div>
   <pre class="log" id="log">No run yet.</pre>
   <button class="ghost" id="stop" hidden>Stop run</button>
+  <div id="apiCard" hidden>
+    <div class="run-sep"></div>
+    <details>
+      <summary>⚠️ Recent API errors (<span id="apiCount">0</span>)</summary>
+      <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time (the error says exactly when). Full history: <code>logs/api_errors.log</code>.</div>
+      <div id="apiErrors"></div>
+    </details>
+  </div>
   <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
 </div>
-</div>
 
-<div class="card" id="apiCard" hidden>
-  <details>
-    <summary>⚠️ Recent API errors (<span id="apiCount">0</span>)</summary>
-    <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time (the error says exactly when). Full history: <code>logs/api_errors.log</code>.</div>
-    <div id="apiErrors"></div>
-  </details>
-</div>
-
-<div class="card">
-  <div class="tabs">
-    <button type="button" id="tabOutput" class="active">Ready to upload (<span id="countOutput">0</span>)</button>
-    <button type="button" id="tabUploaded">Uploaded (<span id="countUploaded">0</span>)</button>
+<div class="card videos-card">
+  <div class="vhead">
+    <div class="tabs">
+      <button type="button" id="tabOutput" class="active">Ready (<span id="countOutput">0</span>)</button>
+      <button type="button" id="tabUploaded">Uploaded (<span id="countUploaded">0</span>)</button>
+    </div>
+    <button type="button" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run authorize_youtube.py once)."{% endif %}>Upload all</button>
   </div>
-  <div id="videos"></div>
+  <div class="carousel" id="videos"></div>
+  <div class="cnav" id="cnav" hidden>
+    <button type="button" id="prevVid" aria-label="Previous video">‹</button>
+    <span id="vidPos"></span>
+    <button type="button" id="nextVid" aria-label="Next video">›</button>
+  </div>
+</div>
 </div>
 
 <script>
@@ -323,42 +362,121 @@ $('form').addEventListener('change', () => { syncForm(); saveForm(); });
 
 // --- Videos ---
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+const CAN_UPLOAD = {{ can_upload | tojson }};
+const NO_KEYS = 'Set the YouTube keys in .env first (run authorize_youtube.py once).';
+let busy = false;  // A run (or upload) is in progress; only one at a time.
+
+function slides() { return [...$('videos').querySelectorAll('.vid')]; }
+function currentSlide() {
+  const c = $('videos');
+  let best = 0, bestDist = Infinity;
+  slides().forEach((el, i) => {
+    const dist = Math.abs(el.offsetLeft - c.scrollLeft - (c.clientWidth - el.clientWidth) / 2);
+    if (dist < bestDist) { best = i; bestDist = dist; }
+  });
+  return best;
+}
+function goToSlide(i, smooth = true) {
+  const el = slides()[i];
+  if (!el) return;
+  slides().forEach(s => s.querySelector('video').pause());
+  const c = $('videos');
+  c.scrollTo({ left: el.offsetLeft - (c.clientWidth - el.clientWidth) / 2, behavior: smooth ? 'smooth' : 'auto' });
+}
+function updateNav() {
+  const n = slides().length;
+  $('cnav').hidden = n < 2;
+  const i = currentSlide();
+  $('vidPos').textContent = `${i + 1} / ${n}`;
+  $('prevVid').disabled = i === 0;
+  $('nextVid').disabled = i >= n - 1;
+}
+
 function renderVideos() {
   const videos = lastVideos[folder] || [];
   $('countOutput').textContent = lastVideos.output.length;
   $('countUploaded').textContent = lastVideos.uploaded.length;
-  if (!videos.length) {
-    $('videos').innerHTML = `<div class="empty">${folder === 'output' ? 'No videos waiting. Generate one above.' : 'Nothing uploaded yet.'}</div>`;
-    return;
-  }
+  $('uploadAll').hidden = folder !== 'output';
+  $('uploadAll').disabled = busy || !CAN_UPLOAD || !lastVideos.output.length;
+
+  const key = folder + '|' + videos.map(v => v.name + v.mtime + (v.topic || '')).join(',');
   // Keep players that already exist so a poll does not interrupt playback.
-  const html = videos.map(v => `
-    <div class="vid" data-name="${esc(v.name)}">
-      <h3>${esc(v.name)}</h3>
-      <div class="meta">${v.created} · ${v.size_mb} MB</div>
-      <video controls preload="none" playsinline src="/videos/${folder}/${encodeURIComponent(v.name)}"></video>
-      <div class="acts">
-        <a href="/download/${folder}/${encodeURIComponent(v.name)}">Download</a>
-        <button type="button" data-del="${esc(v.name)}">Delete</button>
-      </div>
-    </div>`).join('');
-  const key = folder + '|' + videos.map(v => v.name + v.mtime).join(',');
   if ($('videos').dataset.key !== key) {
-    $('videos').innerHTML = html;
+    const was = (slides()[currentSlide()] || {}).dataset;
+    $('videos').innerHTML = videos.length ? videos.map(v => {
+      const name = esc(v.name), url = encodeURIComponent(v.name);
+      const main = folder === 'output'
+        ? `<button type="button" data-up="${name}" data-topic="${esc(v.topic || '')}">Upload</button>`
+        : `<a href="/download/${folder}/${url}">Download</a>`;
+      return `
+      <div class="vid" data-name="${name}">
+        <video controls preload="metadata" playsinline src="/videos/${folder}/${url}#t=0.1"></video>
+        <h3>${v.topic ? esc(v.topic) : '<span style="color:var(--muted)">No topic recorded</span>'}</h3>
+        <div class="meta" title="${name}">${name} · ${v.created} · ${v.size_mb} MB</div>
+        <div class="acts">${main}<button type="button" class="del" data-del="${name}">Delete</button></div>
+      </div>`;
+    }).join('') : `<div class="empty">${folder === 'output' ? 'No videos waiting. Press Generate to make one.' : 'Nothing uploaded yet.'}</div>`;
     $('videos').dataset.key = key;
+    const back = was && slides().findIndex(s => s.dataset.name === was.name);
+    if (back > 0) goToSlide(back, false);
   }
+  for (const b of $('videos').querySelectorAll('[data-up]')) {
+    b.disabled = busy || !CAN_UPLOAD;
+    b.title = CAN_UPLOAD ? '' : NO_KEYS;
+  }
+  updateNav();
 }
-$('videos').addEventListener('click', async e => {
-  const name = e.target.dataset && e.target.dataset.del;
-  if (!name || !confirm('Delete ' + name + '?')) return;
-  await fetch(`/delete/${folder}/` + encodeURIComponent(name), { method: 'POST' });
+
+async function startUpload(fields) {
+  const body = new FormData();
+  body.append('privacy', $('privacy').value);
+  for (const [k, v] of Object.entries(fields)) body.append(k, v);
+  autoScroll = true;
+  const res = await fetch('/publish', { method: 'POST', body });
+  const data = await res.json();
+  if (!data.ok) alert(data.error || 'Could not start the upload.');
   poll();
+}
+function privacyNote() { return `as ${$('privacy').value} (change it under Publish)`; }
+
+$('videos').addEventListener('click', async e => {
+  const d = e.target.dataset || {};
+  if (d.del) {
+    if (!confirm('Delete ' + d.del + '?')) return;
+    await fetch(`/delete/${folder}/` + encodeURIComponent(d.del), { method: 'POST' });
+    poll();
+  } else if (d.up) {
+    let topic = '';
+    if (!d.topic) {
+      topic = (prompt(`No topic was recorded for ${d.up}. What is it about? Gemini writes the title and description from this.`) || '').trim();
+      if (!topic) return;
+    }
+    if (!confirm(`Upload ${d.up} to YouTube ${privacyNote()}?`)) return;
+    startUpload(topic ? { video: d.up, topic } : { video: d.up });
+  }
 });
+$('uploadAll').addEventListener('click', () => {
+  const videos = lastVideos.output;
+  const missing = videos.filter(v => !v.topic).length;
+  const skip = missing ? `\n\n${missing} without a recorded topic will be skipped; upload those on their own.` : '';
+  if (!confirm(`Upload all ${videos.length} video(s) to YouTube ${privacyNote()}?${skip}`)) return;
+  startUpload({});
+});
+$('prevVid').onclick = () => goToSlide(currentSlide() - 1);
+$('nextVid').onclick = () => goToSlide(currentSlide() + 1);
+let navFrame = 0;
+$('videos').addEventListener('scroll', () => {
+  cancelAnimationFrame(navFrame);
+  navFrame = requestAnimationFrame(updateNav);
+});
+window.addEventListener('resize', () => goToSlide(currentSlide(), false));
+
 function setTab(f) {
   folder = f;
   $('tabOutput').classList.toggle('active', f === 'output');
   $('tabUploaded').classList.toggle('active', f === 'uploaded');
   $('videos').dataset.key = '';
+  $('videos').scrollLeft = 0;
   renderVideos();
 }
 $('tabOutput').onclick = () => setTab('output');
@@ -423,6 +541,7 @@ async function poll() {
   }
 
   const running = data.running;
+  busy = running;
   $('dot').className = 'dot' + (running ? ' on' : (data.returncode ? ' fail' : ''));
   $('go').disabled = running;
   $('check').disabled = running;
