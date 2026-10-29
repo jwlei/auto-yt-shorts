@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -34,6 +35,7 @@ from dotenv import load_dotenv
 from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
+from modules.api_log import summarize_api_error
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR
 from modules.topic_history import read_history
 
@@ -77,7 +79,9 @@ class Job:
     def __init__(self):
         self.lock = threading.Lock()
         self.process = None
+        # {"n": sequence number, "t": "HH:MM:SS", "text": ...}; the page appends by n.
         self.lines = []
+        self.seq = 0
         self.started_at = None
         self.finished_at = None
         self.returncode = None
@@ -110,6 +114,8 @@ class Job:
                 # Unbuffered child output, otherwise the log only appears at the end.
                 env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **(env or {})},
                 creationflags=NO_WINDOW,
+                # Its own process group, so stop() can take ffmpeg down with it.
+                start_new_session=os.name != "nt",
             )
 
         threading.Thread(target=self._drain, daemon=True).start()
@@ -122,7 +128,7 @@ class Job:
             # ffmpeg's progress carriage-returns would flood the log.
             if not line or line.startswith("frame=") or line.startswith("["):
                 continue
-            self.lines.append(line)
+            self._add(line)
             self._track(line)
             # Keep memory bounded on long batches.
             if len(self.lines) > 2000:
@@ -130,6 +136,10 @@ class Job:
         process.wait()
         self.returncode = process.returncode
         self.finished_at = datetime.now()
+
+    def _add(self, text):
+        self.seq += 1
+        self.lines.append({"n": self.seq, "t": datetime.now().strftime("%H:%M:%S"), "text": text})
 
     # Lines main.py and its modules print, turned into structured progress.
     PATTERNS = [
@@ -162,12 +172,25 @@ class Job:
             return
 
     def stop(self):
+        """
+        Kills the run and every process it started: terminate() alone would
+        leave its ffmpeg renders running.
+        """
         with self.lock:
-            if self.running:
-                self.process.terminate()
-                self.lines.append("🛑 Stopped by user.")
-                return True
-        return False
+            if not self.running:
+                return False
+            pid = self.process.pid
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                               capture_output=True, creationflags=NO_WINDOW)
+            else:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self._add("🛑 Stopped by user.")
+        interrupt_comfyui()
+        return True
 
     def snapshot(self):
         return {
@@ -394,6 +417,62 @@ def comfyui_launcher():
     return path if path and os.path.exists(path) else None
 
 
+def interrupt_comfyui():
+    """
+    Cancels the avatar clip ComfyUI is rendering for a stopped run, and any
+    queued after it. ComfyUI itself keeps running, with its models loaded for
+    the next run.
+    """
+    if not (comfy_monitor and comfy_monitor.snapshot().get("active")):
+        return
+    url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+    try:
+        # Clear the queue first, or the next queued clip starts as soon as this one stops.
+        requests.post(f"{url}/queue", json={"clear": True}, timeout=5)
+        requests.post(f"{url}/interrupt", timeout=5)
+    except requests.RequestException:
+        pass
+
+
+def comfyui_command(launcher):
+    """
+    The ComfyUI command line from a start script such as the portable build's
+    run_nvidia_gpu.bat, with --disable-auto-launch added so no browser tab
+    opens: the panel only needs its API. None if the script has no main.py line.
+    """
+    try:
+        with open(launcher, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if "main.py" in line and not line.lower().startswith(("rem", "::", "echo")):
+                    return line if "--disable-auto-launch" in line else line + " --disable-auto-launch"
+    except OSError:
+        pass
+    return None
+
+
+def launch_comfyui(launcher):
+    """
+    Starts ComfyUI in its own minimised console window, so it can be watched
+    (or closed to stop it) and outlives this server. (Not 'start': it only takes
+    a quoted first argument as the window title and would open a folder named ComfyUI.)
+    """
+    command = comfyui_command(launcher)
+    if os.name != "nt":
+        subprocess.Popen(command or [launcher], shell=bool(command),
+                         cwd=os.path.dirname(launcher), start_new_session=True)
+        return
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimised, without stealing focus
+    subprocess.Popen(
+        f"cmd /c {command}" if command else ["cmd", "/c", launcher],
+        cwd=os.path.dirname(launcher),
+        creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+        startupinfo=startup,
+    )
+
+
 def start_comfyui_for_run(form):
     """
     Starts ComfyUI for avatar runs when a launcher is configured. Returns True
@@ -413,10 +492,7 @@ def start_comfyui_for_run(form):
         if time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT:
             return True  # Launched moments ago and still loading.
         try:
-            subprocess.Popen(
-                ["cmd", "/c", "start", "ComfyUI", "/min", launcher],
-                cwd=os.path.dirname(launcher),
-            )
+            launch_comfyui(launcher)
         except OSError as e:
             raise RuntimeError(f"Could not start ComfyUI: {e}") from e
         _comfyui_start_requested_at = time.time()
@@ -435,7 +511,7 @@ def recent_api_errors(count=12):
         parts = line.rstrip("\n").split("\t")
         if len(parts) >= 5:
             errors.append({"when": parts[0].replace("T", " "), "service": parts[1], "model": parts[2],
-                           "status": parts[3], "message": parts[4]})
+                           "status": parts[3], "message": summarize_api_error(parts[4])})
     return errors
 
 

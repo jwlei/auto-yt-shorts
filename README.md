@@ -244,7 +244,11 @@ The server listens on your home network, so the panel also shows the address
 to open on your phone. When a generation uses ComfyUI avatar clips, it starts
 ComfyUI automatically if `COMFYUI_LAUNCHER` (e.g.
 `C:\ComfyUI\run_nvidia_gpu.bat`) is set in `.env`, and the avatar stage waits up
-to 3 minutes for it to finish loading. Without a launcher, start ComfyUI
+to 3 minutes for it to finish loading. It runs the script's `main.py` command
+with `--disable-auto-launch`, so no ComfyUI browser tab opens, in a minimised
+console window you can close to stop it. **Stop** (in place of Generate while a
+run is going) kills the run and its ffmpeg renders and cancels the ComfyUI clip
+it was rendering; the panel and ComfyUI keep running. Without a launcher, start ComfyUI
 yourself; failed avatar renders fall back to stock footage.
 
 To keep that phone address the same, give the PC a fixed IP: in your router's

@@ -106,7 +106,12 @@ def preflight(args=None):
     if avatar_source == "comfyui":
         try:
             generator = AvatarGenerator()
-            if not generator.is_reachable():
+            if generator.is_reachable():
+                pass
+            elif os.getenv("COMFYUI_STARTUP_WAIT"):
+                # The web UI just launched it; it loads while the script and voice are made.
+                print(f"⏳ ComfyUI is starting at {generator.url} — the avatar stage will wait for it.")
+            else:
                 # Not fatal: avatar scenes fall back to the static clip or stock footage.
                 print(f"⚠️ ComfyUI is not reachable at {generator.url} — avatar scenes will fall back.")
         except RuntimeError as e:

@@ -7,20 +7,29 @@
   .dot.ok { background: var(--ok); }
   .dot.fail { background: var(--err); }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
-  pre.log {
+  .log {
     background: #0a0b0f;
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 12px;
+    padding: 10px 12px;
     max-height: 340px;
     overflow: auto;
-    font-size: .78rem;
+    font-size: .84rem;
     line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin: 0;
     color: #cbd0dd;
   }
+  .log .empty-log { color: var(--muted); }
+  /* One row per line: a muted timestamp gutter, then the text colour-coded by kind. */
+  .ln { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px; padding: 1px 0; }
+  .ln .t { color: #5d6376; font: .74rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
+  .ln .x { white-space: pre-wrap; word-break: break-word; }
+  .ln.err .x { color: var(--err); }
+  .ln.warn .x { color: #f2b84b; }
+  .ln.ok .x { color: var(--ok); }
+  .ln.dim .x { color: var(--muted); }
+  .ln.stage { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
+  .ln.stage:first-child { margin-top: 0; padding-top: 1px; border-top: 0; }
+  .ln.stage .x { color: var(--accent); font-weight: 700; }
   .hint { color: var(--muted); font-size: .78rem; margin-top: 5px; line-height: 1.4; }
   .hint b { color: var(--text); font-weight: 600; }
   h2 { font-size: .95rem; margin: 0 0 4px; }
@@ -33,6 +42,7 @@
   .btns { display: flex; gap: 10px; }
   .btns button { margin-top: 0; white-space: nowrap; }
   .btns .ghost { flex: 0 0 34%; }
+  .btns .danger { background: var(--err); }
   .run-sep { border-top: 1px solid var(--line); margin: 14px 0 12px; }
   .sys { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: .85rem; }
   .sys .item { display: flex; align-items: center; gap: 8px; }
@@ -119,14 +129,14 @@
       max-height: calc(100vh - 28px);
       overflow: auto;
     }
-    .run-card pre.log { flex: 1 1 auto; min-height: 120px; max-height: none; }
+    .run-card .log { flex: 1 1 auto; min-height: 120px; max-height: none; }
   }
   @media (min-width: 1280px) {
     .wrap { height: 100vh; display: flex; flex-direction: column; }
     .dashboard {
       flex: 1;
       min-height: 540px;
-      grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr) minmax(260px, .75fr);
+      grid-template-columns: minmax(500px, 1.25fr) minmax(360px, 1.35fr) minmax(260px, .7fr);
       grid-template-rows: minmax(0, 1fr);
       align-items: stretch;
     }
@@ -264,17 +274,16 @@
 
 <div class="card run-card">
   <div class="btns">
-    <button type="button" class="ghost" id="check">Check setup</button>
+    <button type="button" class="ghost" id="check" title="Verifies keys, ffmpeg and ComfyUI for these options without making anything.">Check setup</button>
     <button type="submit" form="form" id="go">Generate</button>
+    <button type="button" class="danger" id="stop" hidden>Stop</button>
   </div>
-  <div class="hint" style="text-align:center">“Check setup” verifies keys, ffmpeg and ComfyUI for these options without making anything.</div>
   <div class="err" id="formError" hidden></div>
 
   <div class="run-sep"></div>
-  <div class="sys">
+  <div class="sys" title="ComfyUI renders the avatar clips on your GPU. Generate starts it (without its web page) when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env; otherwise start it yourself. Failed avatar renders fall back to stock footage.">
     <div class="item"><span class="dot" id="comfyDot"></span><span id="comfyText">ComfyUI: checking…</span></div>
   </div>
-  <div class="hint" id="comfyHint">Renders the avatar clips on your GPU. Generate starts it when the run needs avatar clips (set <code>COMFYUI_LAUNCHER</code> in .env); otherwise start it yourself. Failed avatar renders fall back to stock footage.</div>
 
   <div class="run-sep"></div>
   <div class="status">
@@ -292,8 +301,7 @@
     </div>
   </div>
   <div class="hint gpu" id="gpuLine"></div>
-  <pre class="log" id="log">No run yet.</pre>
-  <button class="ghost" id="stop" hidden>Stop run</button>
+  <div class="log" id="log"><span class="empty-log">No run yet.</span></div>
   <div id="apiCard" hidden>
     <div class="run-sep"></div>
     <details>
@@ -531,6 +539,32 @@ function renderNow(data) {
     : '';
 }
 
+// --- Log ---
+function lineKind(text) {
+  const s = text.trim();
+  if (/^▶ Stage|^=====/.test(s)) return 'stage';
+  if (/^❌|^🚨|Error\b|Traceback/.test(s)) return 'err';
+  if (/^⚠️|^🛑/.test(s)) return 'warn';
+  if (/^✅|^✨|^📦/.test(s)) return 'ok';
+  if (/^Deleted:|^🧹/.test(s)) return 'dim';
+  return '';
+}
+let logFirst = null, logLast = 0;
+function renderLog(lines) {
+  const el = $('log');
+  const row = l => `<div class="ln ${lineKind(l.text)}"><span class="t">${l.t}</span><span class="x">${esc(l.text)}</span></div>`;
+  // A new run, or old lines trimmed off the top: redraw. Otherwise append what is new.
+  if (lines[0].n !== logFirst) {
+    el.innerHTML = lines.map(row).join('');
+    logFirst = lines[0].n;
+  } else {
+    const fresh = lines.filter(l => l.n > logLast);
+    if (fresh.length) el.insertAdjacentHTML('beforeend', fresh.map(row).join(''));
+  }
+  logLast = lines[lines.length - 1].n;
+  if (autoScroll) el.scrollTop = el.scrollHeight;
+}
+
 // --- Status polling ---
 async function poll() {
   let data;
@@ -547,6 +581,7 @@ async function poll() {
   $('check').disabled = running;
   $('go').textContent = running ? 'Running…' : 'Generate';
   $('stop').hidden = !running;
+  $('go').hidden = running;
 
   renderNow(data);
 
@@ -562,10 +597,7 @@ async function poll() {
     $('statusText').textContent = 'Idle';
   }
 
-  if (data.lines.length) {
-    $('log').textContent = data.lines.join('\n');
-    if (autoScroll) $('log').scrollTop = $('log').scrollHeight;
-  }
+  if (data.lines.length) renderLog(data.lines);
 
   const c = data.comfyui;
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : 'fail');
@@ -604,7 +636,7 @@ async function startJob(url) {
 $('form').addEventListener('submit', e => { e.preventDefault(); saveForm(); startJob('/generate'); });
 $('check').addEventListener('click', () => startJob('/check'));
 $('stop').addEventListener('click', async () => {
-  if (!confirm('Stop the current run?')) return;
+  if (!confirm('Stop the current run? This kills it and its ffmpeg renders, and cancels the ComfyUI clip it is rendering.')) return;
   await fetch('/stop', { method: 'POST' });
   poll();
 });
