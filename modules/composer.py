@@ -61,6 +61,7 @@ class Composer:
                     # ---------------------------------------------------------
                     .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
                     .filter('crop', 1080, 1920)
+                    .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
                     .filter('fps', fps=30, round='up')
                 )
             else:
@@ -80,6 +81,7 @@ class Composer:
                     .setpts('PTS-STARTPTS')
                     .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
                     .filter('crop', 1080, 1920)
+                    .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
                     .filter('fps', fps=30, round='up')
                 )
 
@@ -89,6 +91,7 @@ class Composer:
                     .setpts('PTS-STARTPTS')
                     .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
                     .filter('crop', 1080, 1920)
+                    .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
                     .filter('fps', fps=30, round='up')
                 )
 
