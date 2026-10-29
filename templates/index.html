@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+{% block body %}
+<style>
+  .status { display: flex; align-items: center; gap: 9px; font-size: .9rem; margin-bottom: 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); animation: pulse 1.4s infinite; }
+  .dot.ok { background: var(--ok); }
+  .dot.fail { background: var(--err); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  pre.log {
+    background: #0a0b0f;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 340px;
+    overflow: auto;
+    font-size: .78rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    color: #cbd0dd;
+  }
+  .hint { color: var(--muted); font-size: .78rem; margin-top: 5px; line-height: 1.4; }
+  .hint b { color: var(--text); font-weight: 600; }
+  h2 { font-size: .95rem; margin: 0 0 4px; }
+  .section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 4px; }
+  .section:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+  .section-title { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 14px 0 0; font-weight: 700; }
+  .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: .95rem; color: var(--text); }
+  .check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+  .check .hint { margin-top: 2px; }
+  .btns { display: flex; gap: 10px; }
+  .btns button { margin-top: 18px; }
+  .btns .ghost { flex: 0 0 34%; }
+  .sys { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: .85rem; }
+  .sys .item { display: flex; align-items: center; gap: 8px; }
+  .sys button { width: auto; margin: 0; padding: 7px 12px; font-size: .8rem; }
+  .phone { font-size: .82rem; color: var(--muted); margin-top: 10px; }
+  .phone code { color: var(--text); background: var(--panel-2); padding: 2px 6px; border-radius: 6px; user-select: all; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs button { margin: 0; padding: 9px; font-size: .85rem; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .vid { border-top: 1px solid var(--line); padding: 14px 0; }
+  .vid:first-of-type { border-top: 0; padding-top: 4px; }
+  .vid h3 { margin: 0 0 3px; font-size: .92rem; font-weight: 600; word-break: break-all; }
+  .vid .meta { color: var(--muted); font-size: .78rem; margin-bottom: 9px; }
+  video { width: 100%; max-height: 62vh; border-radius: 10px; background: #000; display: block; }
+  .acts { display: flex; gap: 9px; margin-top: 9px; }
+  .acts a, .acts button {
+    flex: 1; margin: 0; padding: 11px; font-size: .85rem; text-align: center;
+    text-decoration: none; border-radius: 9px; font-weight: 600;
+  }
+  .acts a { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .acts button { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
+  details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
+  .apierr { font-size: .78rem; border-top: 1px solid var(--line); padding: 8px 0; word-break: break-word; }
+  .apierr:first-child { border-top: 0; }
+  .apierr .when { color: var(--muted); }
+  .apierr .code { color: var(--err); font-weight: 600; }
+  .hidden { display: none !important; }
+  .stepper { display: flex; gap: 4px; margin: 2px 0 12px; }
+  .step { flex: 1; text-align: center; font-size: .66rem; color: var(--muted); padding-top: 7px; border-top: 3px solid var(--line); line-height: 1.25; }
+  .step.done { border-color: var(--ok); color: var(--text); }
+  .step.now { border-color: var(--accent); color: var(--text); font-weight: 700; }
+  .now-line { font-size: .92rem; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+  .now-line .time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+  .comfy-now { margin-top: 12px; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+  .bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .gpu { margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="top">
+  <div>
+    <h1>🎬 Auto YT Shorts</h1>
+    <p class="sub" style="margin-bottom:6px">Pick your options, press Generate, and watch it work. Finished videos appear at the bottom.</p>
+  </div>
+  {% if protected %}<a href="{{ url_for('logout') }}">Sign out</a>{% endif %}
+</div>
+
+<div class="card">
+  <div class="sys">
+    <div class="item"><span class="dot" id="comfyDot"></span><span id="comfyText">ComfyUI: checking…</span></div>
+    <button class="ghost hidden" id="comfyStart" type="button">Start ComfyUI</button>
+  </div>
+  <div class="hint" id="comfyHint">ComfyUI renders the avatar clips on your GPU. It must be running for avatar videos — otherwise those scenes fall back to stock footage.</div>
+  <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
+</div>
+
+<form class="card" id="form">
+  <div class="section">
+    <div class="section-title">What to make</div>
+
+    <label for="topic">Topic</label>
+    <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
+    <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you.</div>
+
+    <div class="row">
+      <div>
+        <label for="runs">How many videos</label>
+        <input id="runs" name="runs" type="number" min="1" max="10" value="1" inputmode="numeric">
+      </div>
+      <div>
+        <label for="lang">Language</label>
+        <select id="lang" name="lang">
+          <option value="en-GB">English (UK)</option>
+          <option value="en-US">English (US)</option>
+        </select>
+      </div>
+    </div>
+    <div class="hint">Each video takes ~15–25 min with avatars. The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Voice</div>
+    <label for="voice">Narrator</label>
+    <select id="voice" name="voice">
+      {% for value, label in voices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+    <div class="hint">Natural Gemini voices. If Gemini 3.8 Flash TTS is out of quota or slow, the same voice is used through 3.8 Flash Lite TTS. If both fail, the run stops — it never falls back to a robotic voice.</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Avatar (presenter)</div>
+    <label for="avatar_clips">When she appears</label>
+    <select id="avatar_clips" name="avatar_clips">
+      <option value="3">Opens the video + 2 middle scenes (3 clips)</option>
+      <option value="2">2 middle scenes only (2 clips)</option>
+      <option value="0">No avatar — stock footage only</option>
+    </select>
+    <div class="hint">The opening scene is the hook, so starting on the presenter builds recognition. Each clip adds ~4–5 min of GPU time.</div>
+
+    <div id="avatarOpts">
+      <div class="row">
+        <div>
+          <label for="avatar_source">Source</label>
+          <select id="avatar_source" name="avatar_source">
+            <option value="comfyui">Generate with ComfyUI</option>
+            <option value="static" {% if not static_avatar %}disabled{% endif %}>Static clip (avatars.mp4){% if not static_avatar %} — not found{% endif %}</option>
+          </select>
+        </div>
+        <div>
+          <label for="avatar_style">Style</label>
+          <select id="avatar_style" name="avatar_style">
+            <option value="lipsync">Speaks the line (lip-sync)</option>
+            <option value="reaction">Silent reactions</option>
+          </select>
+        </div>
+      </div>
+      <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Publish</div>
+    <label class="check">
+      <input type="checkbox" name="upload" id="upload">
+      <span>Upload to YouTube when done
+        <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run authorize_youtube.py once).</div>
+      </span>
+    </label>
+    <div id="privacyWrap" class="hidden">
+      <label for="privacy">Privacy</label>
+      <select id="privacy" name="privacy">
+        <option value="private">Private — only you</option>
+        <option value="unlisted">Unlisted — anyone with the link</option>
+        <option value="public">Public</option>
+      </select>
+      <div class="hint">YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <details>
+      <summary>Advanced</summary>
+      <label for="output">File name (single video only)</label>
+      <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS.mp4" autocomplete="off">
+      <div class="hint">Leave empty for a timestamped name. Saved in <code>0_output</code>.</div>
+
+      <label class="check">
+        <input type="checkbox" name="fail_fast">
+        <span>Stop the batch at the first failed video
+          <div class="hint">Otherwise a failed video is skipped and the batch carries on.</div>
+        </span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="keep_cache">
+        <span>Keep intermediate files
+          <div class="hint">Keeps the voice clips, stock footage and avatar clips in <code>assets/</code> for debugging. Normally they are deleted after each video.</div>
+        </span>
+      </label>
+    </details>
+  </div>
+
+  <div class="btns">
+    <button type="button" class="ghost" id="check">Check setup</button>
+    <button type="submit" id="go">Generate</button>
+  </div>
+  <div class="hint" style="text-align:center">“Check setup” verifies keys, ffmpeg and ComfyUI for these options without making anything.</div>
+  <div class="err" id="formError" hidden></div>
+</form>
+
+<div class="card">
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">Idle</span>
+  </div>
+  <div id="now" class="hidden">
+    <div class="stepper" id="stepper"></div>
+    <div class="now-line"><b id="stageName"></b><span class="time" id="stageTime"></span></div>
+    <div class="hint" id="stageDetail"></div>
+    <div id="comfyNow" class="comfy-now hidden">
+      <div class="now-line"><span>ComfyUI:</span><b id="comfyLabel"></b><span class="time" id="comfySteps"></span></div>
+      <div class="bar"><div id="comfyBar"></div></div>
+      <div class="hint" id="comfyMeta"></div>
+    </div>
+  </div>
+  <div class="hint gpu" id="gpuLine"></div>
+  <pre class="log" id="log">No run yet.</pre>
+  <button class="ghost" id="stop" hidden>Stop run</button>
+</div>
+
+<div class="card" id="apiCard" hidden>
+  <details>
+    <summary>⚠️ Recent API errors (<span id="apiCount">0</span>)</summary>
+    <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time (08:00 UK). Full history: <code>logs/api_errors.log</code>.</div>
+    <div id="apiErrors"></div>
+  </details>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    <button type="button" id="tabOutput" class="active">Ready to upload (<span id="countOutput">0</span>)</button>
+    <button type="button" id="tabUploaded">Uploaded (<span id="countUploaded">0</span>)</button>
+  </div>
+  <div id="videos"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const STORE_KEY = 'autoshorts.form';
+let autoScroll = true;
+let folder = 'output';
+let lastVideos = { output: [], uploaded: [] };
+
+const DEFAULTS = {
+  avatar_source: {{ (defaults.avatar_source if defaults.avatar_source in ['comfyui', 'static'] else 'comfyui') | tojson }},
+  avatar_clips: {{ defaults.avatar_clips | tojson }},
+};
+
+// --- Remember the last options (per browser) ---
+function saveForm() {
+  const data = {};
+  for (const el of $('form').elements) {
+    if (!el.name || el.name === 'topic' || el.name === 'output') continue;
+    data[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+function loadForm() {
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) {}
+  data = { ...DEFAULTS, ...data };
+  for (const el of $('form').elements) {
+    if (!el.name || !(el.name in data)) continue;
+    if (el.type === 'checkbox') el.checked = !!data[el.name];
+    else if ([...(el.options || [])].some(o => o.value === String(data[el.name]) && !o.disabled) || !el.options) el.value = data[el.name];
+  }
+}
+function syncForm() {
+  $('privacyWrap').classList.toggle('hidden', !$('upload').checked);
+  $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
+  $('avatar_style').disabled = $('avatar_source').value !== 'comfyui';
+}
+$('form').addEventListener('change', () => { syncForm(); saveForm(); });
+
+// --- Videos ---
+function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function renderVideos() {
+  const videos = lastVideos[folder] || [];
+  $('countOutput').textContent = lastVideos.output.length;
+  $('countUploaded').textContent = lastVideos.uploaded.length;
+  if (!videos.length) {
+    $('videos').innerHTML = `<div class="empty">${folder === 'output' ? 'No videos waiting. Generate one above.' : 'Nothing uploaded yet.'}</div>`;
+    return;
+  }
+  // Keep players that already exist so a poll does not interrupt playback.
+  const html = videos.map(v => `
+    <div class="vid" data-name="${esc(v.name)}">
+      <h3>${esc(v.name)}</h3>
+      <div class="meta">${v.created} · ${v.size_mb} MB</div>
+      <video controls preload="none" playsinline src="/videos/${folder}/${encodeURIComponent(v.name)}"></video>
+      <div class="acts">
+        <a href="/download/${folder}/${encodeURIComponent(v.name)}">Download</a>
+        <button type="button" data-del="${esc(v.name)}">Delete</button>
+      </div>
+    </div>`).join('');
+  const key = folder + '|' + videos.map(v => v.name + v.mtime).join(',');
+  if ($('videos').dataset.key !== key) {
+    $('videos').innerHTML = html;
+    $('videos').dataset.key = key;
+  }
+}
+$('videos').addEventListener('click', async e => {
+  const name = e.target.dataset && e.target.dataset.del;
+  if (!name || !confirm('Delete ' + name + '?')) return;
+  await fetch(`/delete/${folder}/` + encodeURIComponent(name), { method: 'POST' });
+  poll();
+});
+function setTab(f) {
+  folder = f;
+  $('tabOutput').classList.toggle('active', f === 'output');
+  $('tabUploaded').classList.toggle('active', f === 'uploaded');
+  $('videos').dataset.key = '';
+  renderVideos();
+}
+$('tabOutput').onclick = () => setTab('output');
+$('tabUploaded').onclick = () => setTab('uploaded');
+
+// --- What is happening right now ---
+const STAGES = ['Topic & script', 'Voice', 'Stock footage', 'Avatar clips', 'Rendering scenes', 'Stitching', 'Upload'];
+const STAGE_HINTS = {
+  'Topic & script': 'Gemini is picking the topic and writing the scenes.',
+  'Voice': 'Gemini TTS is reading the whole script in one take, then it is cut into scenes.',
+  'Stock footage': 'Downloading two stock clips per scene.',
+  'Avatar clips': 'ComfyUI is generating the presenter clips on your GPU — the slowest step (~4–5 min per clip).',
+  'Rendering scenes': 'ffmpeg is combining each scene’s footage with its voice.',
+  'Stitching': 'Joining the scenes with transitions into the final video.',
+  'Upload': 'Writing the title and description, then uploading to YouTube.',
+};
+function fmt(sec) {
+  sec = Math.max(0, sec | 0);
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s).padStart(2, '0')}`;
+}
+function renderNow(data) {
+  const p = data.progress || {};
+  const c = data.comfyui || {};
+  const show = data.running && p.stage;
+  $('now').classList.toggle('hidden', !show);
+  if (show) {
+    const [n, total, name] = p.stage;
+    const names = STAGES.slice(0, total);
+    $('stepper').innerHTML = names.map((s, i) =>
+      `<div class="step ${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}">${esc(s)}</div>`).join('');
+    $('stageName').textContent = `Step ${n} of ${total}: ${name}`;
+    $('stageTime').textContent = fmt(p.stage_elapsed);
+    $('stageDetail').textContent = p.detail || STAGE_HINTS[name] || '';
+  }
+
+  // ComfyUI's own progress: which part of the workflow, and sampling steps.
+  const comfyBusy = c.active && c.connected;
+  $('comfyNow').classList.toggle('hidden', !comfyBusy);
+  if (comfyBusy) {
+    $('comfyLabel').textContent = c.label || 'Working';
+    const hasSteps = c.max && c.value != null;
+    $('comfySteps').textContent = hasSteps ? `step ${c.value} of ${c.max}` : '';
+    $('comfyBar').style.width = hasSteps ? `${Math.round(100 * c.value / c.max)}%` : '0';
+    const queued = c.queue > 1 ? ` · ${c.queue - 1} more queued` : '';
+    $('comfyMeta').textContent = `This clip: ${fmt(c.elapsed || 0)}${queued}`;
+  }
+
+  const g = data.gpu;
+  $('gpuLine').textContent = g
+    ? `GPU ${g.util}% · VRAM ${g.mem_used} / ${g.mem_total} GB · ${g.power} W · ${g.temp}°C`
+    : '';
+}
+
+// --- Status polling ---
+async function poll() {
+  let data;
+  try {
+    data = await (await fetch('/api/status')).json();
+  } catch (e) {
+    return; // transient; the next tick retries
+  }
+
+  const running = data.running;
+  $('dot').className = 'dot' + (running ? ' on' : (data.returncode ? ' fail' : ''));
+  $('go').disabled = running;
+  $('check').disabled = running;
+  $('go').textContent = running ? 'Running…' : 'Generate';
+  $('stop').hidden = !running;
+
+  renderNow(data);
+
+  if (running) {
+    const p = data.progress || {};
+    const run = p.run ? ` · video ${p.run[0]} of ${p.run[1]}` : '';
+    $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} total (started ${data.started_at})`;
+  } else if (data.returncode === 0) {
+    $('statusText').textContent = 'Finished ✔';
+  } else if (data.returncode !== null) {
+    $('statusText').textContent = `Failed (exit ${data.returncode}) — see the log and API errors below`;
+  } else {
+    $('statusText').textContent = 'Idle';
+  }
+
+  if (data.lines.length) {
+    $('log').textContent = data.lines.join('\n');
+    if (autoScroll) $('log').scrollTop = $('log').scrollHeight;
+  }
+
+  const c = data.comfyui;
+  $('comfyDot').className = 'dot ' + (c.online ? 'ok' : 'fail');
+  $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running' : 'not running');
+  $('comfyStart').classList.toggle('hidden', c.online || !c.can_start);
+
+  $('apiCard').hidden = !data.api_errors.length;
+  $('apiCount').textContent = data.api_errors.length;
+  $('apiErrors').innerHTML = data.api_errors.map(e => `
+    <div class="apierr"><span class="when">${esc(e.when)}</span> · ${esc(e.service)} <b>${esc(e.model)}</b>
+      <span class="code">${esc(e.status)}</span><br>${esc(e.message)}</div>`).join('');
+
+  lastVideos = data.videos;
+  renderVideos();
+}
+
+$('log').addEventListener('scroll', () => {
+  const el = $('log');
+  autoScroll = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+});
+
+async function startJob(url) {
+  $('formError').hidden = true;
+  $('go').disabled = true;
+  $('check').disabled = true;
+  autoScroll = true;
+  const res = await fetch(url, { method: 'POST', body: new FormData($('form')) });
+  const body = await res.json();
+  if (!body.ok) {
+    $('formError').textContent = body.error || 'Could not start.';
+    $('formError').hidden = false;
+  }
+  poll();
+}
+$('form').addEventListener('submit', e => { e.preventDefault(); saveForm(); startJob('/generate'); });
+$('check').addEventListener('click', () => startJob('/check'));
+$('stop').addEventListener('click', async () => {
+  if (!confirm('Stop the current run?')) return;
+  await fetch('/stop', { method: 'POST' });
+  poll();
+});
+$('comfyStart').addEventListener('click', async () => {
+  $('comfyStart').disabled = true;
+  $('comfyText').textContent = 'ComfyUI: starting… (takes ~30s)';
+  await fetch('/comfyui/start', { method: 'POST' });
+  setTimeout(() => { $('comfyStart').disabled = false; poll(); }, 3000);
+});
+
+loadForm();
+syncForm();
+poll();
+setInterval(poll, 2000);
+</script>
+{% endblock %}

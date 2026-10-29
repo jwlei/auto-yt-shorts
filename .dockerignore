@@ -1,0 +1,12 @@
+.git
+.github
+__pycache__/
+*.pyc
+.env
+0_output/*
+1_uploaded/*
+logs/
+assets/temp/*
+assets/audio_clips/*
+assets/video_clips/*
+*.log

@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+venv/
+
+# Environment variables (Critical for security)
+.env
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Build outputs
+/dist
+/build
+/video-gen
+/assets/audio_clips
+/assets/final
+/0_output/*
+/1_uploaded/*
+!/0_output/.gitkeep
+!/1_uploaded/.gitkeep
+/logs
+/assets/temp
+/assets/video_clips
+/assets/search_cache
+__pycache__/
+*.pyc
+/assets/avatar/avatar.mp4
+/assets/avatar/Gemini_Generated_Image_ww2ko4ww2ko4ww2k.png
+*.log
+
+# YouTube API credentials (NEVER commit!)
+client_secrets.json
+token.pickle
+upload_history.json
+metadata_review.json
+
+# Persona image used as the avatar reference
+/assets/avatar/avatar.jpg
+

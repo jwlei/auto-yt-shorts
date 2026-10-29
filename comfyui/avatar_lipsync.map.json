@@ -1,0 +1,10 @@
+{
+  "_comment": "Which inputs of avatar_workflow.json (ComfyUI 'Export (API)') the pipeline fills, as \"<node id>.<input>\". Only 'prompt' is required. Mapping 'audio' turns on lip-sync: the scene's narration is fed in and the video is generated to match it.",
+  "prompt": "121.text",
+  "image": "167.image",
+  "text_to_video": "290.value",
+  "seconds": "291.value",
+  "width": "292.value",
+  "height": "293.value",
+  "audio": "900.audio"
+}
