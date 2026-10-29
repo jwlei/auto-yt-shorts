@@ -35,6 +35,6 @@ token.pickle
 upload_history.json
 metadata_review.json
 
-# Persona image used as the avatar reference
-/assets/avatar/avatar.jpg
+# Persona images used as the avatar reference (one is picked per video)
+/assets/avatar/avatar*.jpg
 

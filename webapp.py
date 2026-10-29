@@ -236,6 +236,10 @@ def lan_ip():
 
 
 _comfyui_cache = {"at": 0.0, "online": False}
+_comfyui_start_lock = threading.Lock()
+_comfyui_start_requested_at = 0.0
+# Seconds a run waits for a ComfyUI that Generate just launched to load its models.
+COMFYUI_STARTUP_WAIT = 180
 
 
 def comfyui_online():
@@ -380,6 +384,36 @@ def comfyui_launcher():
     return path if path and os.path.exists(path) else None
 
 
+def start_comfyui_for_run(form):
+    """
+    Starts ComfyUI for avatar runs when a launcher is configured. Returns True
+    when ComfyUI is (still) booting, so the run should wait for it.
+    """
+    global _comfyui_start_requested_at
+    if (form.get("avatar_source") or "comfyui") != "comfyui" or (form.get("avatar_clips") or "auto") == "0":
+        return False
+
+    with _comfyui_start_lock:
+        _comfyui_cache["at"] = 0.0
+        if comfyui_online():
+            return False
+        launcher = comfyui_launcher()
+        if not launcher:
+            return False
+        if time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT:
+            return True  # Launched moments ago and still loading.
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "ComfyUI", "/min", launcher],
+                cwd=os.path.dirname(launcher),
+            )
+        except OSError as e:
+            raise RuntimeError(f"Could not start ComfyUI: {e}") from e
+        _comfyui_start_requested_at = time.time()
+        _comfyui_cache["at"] = 0.0
+        return True
+
+
 def recent_api_errors(count=12):
     try:
         with open(API_ERROR_LOG, "r", encoding="utf-8") as f:
@@ -452,6 +486,8 @@ def build_run(form):
         runs = max(1, min(10, int(form.get("runs", 1))))
     except ValueError:
         runs = 1
+    if topic and runs > 1:
+        return None, None, "A topic makes one video. Leave Topic empty to make several."
     argv += ["--runs", str(runs)]
 
     lang = form.get("lang") or "en-GB"
@@ -514,6 +550,12 @@ def generate():
     if error:
         return {"ok": False, "error": error}, 400
 
+    try:
+        if start_comfyui_for_run(request.form):
+            env["COMFYUI_STARTUP_WAIT"] = str(COMFYUI_STARTUP_WAIT)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}, 500
+
     if not job.start(argv, env):
         return {"ok": False, "error": "A run is already in progress."}, 409
     return {"ok": True}
@@ -550,26 +592,14 @@ def shutdown():
     return {"ok": True}
 
 
-@app.route("/comfyui/start", methods=["POST"])
-@password_required
-def start_comfyui():
-    launcher = comfyui_launcher()
-    if not launcher:
-        return {"ok": False, "error": "Set COMFYUI_LAUNCHER in .env to ComfyUI's start script."}, 400
-    if comfyui_online():
-        return {"ok": True}
-    # Its own minimised console window, so it outlives this server and can be watched.
-    subprocess.Popen(["cmd", "/c", "start", "ComfyUI", "/min", launcher], cwd=os.path.dirname(launcher))
-    _comfyui_cache["at"] = 0.0
-    return {"ok": True}
-
-
 @app.route("/api/status")
 @password_required
 def status():
     payload = job.snapshot()
     payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
-    payload["comfyui"] = {"online": comfyui_online(), "can_start": bool(comfyui_launcher()),
+    online = comfyui_online()
+    payload["comfyui"] = {"online": online, "can_start": bool(comfyui_launcher()),
+                          "starting": not online and time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT,
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
     payload["api_errors"] = recent_api_errors()

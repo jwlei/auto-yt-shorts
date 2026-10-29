@@ -14,6 +14,7 @@ from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_a
                                       get_avatar_source, plan_avatar_scenes)
 from modules.composer import Composer
 from modules.paths import move_to_uploaded
+from modules.topic_history import find_exact_repeat, read_successful_topics, record_successful_topic
 
 load_dotenv()
 
@@ -134,6 +135,52 @@ def build_output_name(prefix="short"):
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
 
 
+# How many topics the picker may suggest before a run gives up on repeats.
+TOPIC_ATTEMPTS = 3
+
+
+def find_repeat(brain, topic, used_topics):
+    """
+    Returns the earlier topic that `topic` repeats, or None. Exact repeats are
+    caught locally; anything else is up to the fast model's judgement.
+    """
+    exact = find_exact_repeat(topic, used_topics)
+    if exact:
+        return exact
+    try:
+        return brain.find_repeat_topic(topic, used_topics)
+    except Exception as e:
+        # A broken repeat check should not stop an unattended run.
+        print(f"   ⚠️ Repeat-topic check failed ({e}). Only exact repeats were ruled out.")
+        return None
+
+
+def choose_topic(brain, requested, used_topics):
+    """
+    Returns a topic no successful video has covered yet, or None. A requested
+    topic is checked as-is; the AI picker gets a few tries to suggest a new one.
+    """
+    if requested:
+        topic = requested.strip()
+        repeat = find_repeat(brain, topic, used_topics)
+        if repeat:
+            print(f"❌ A video on this topic was already made ({repeat}). Pick another topic, or leave it empty.")
+            return None
+        print(f"🎯 Using provided topic: {topic}")
+        return topic
+
+    rejected = []
+    for _ in range(TOPIC_ATTEMPTS):
+        topic = brain.get_trending_topic(used_topics + rejected)
+        repeat = find_repeat(brain, topic, used_topics)
+        if not repeat:
+            return topic
+        print(f"   ⚠️ Already made a video on this ({repeat}). Picking another topic...")
+        rejected.append(topic)
+    print(f"❌ The topic picker kept suggesting topics that were already made ({TOPIC_ATTEMPTS} tries).")
+    return None
+
+
 async def generate_one(args):
     """
     Runs the full pipeline once. Returns the final video path, or None on failure.
@@ -145,12 +192,12 @@ async def generate_one(args):
     stage("Topic & script", upload)
     brain = ContentBrain()
     try:
-        topic = args.topic or brain.get_trending_topic()
-        if args.topic:
-            print(f"🎯 Using provided topic: {topic}")
+        topic = choose_topic(brain, args.topic, read_successful_topics())
+        if not topic:
+            return None
         script = brain.generate_script(topic, lang=lang)
     except Exception as e:
-        print(f"❌ Brain Error: {e}")
+        print(f"❌ Topic/script Error: {e}")
         return None
 
     if not script:
@@ -179,7 +226,7 @@ async def generate_one(args):
     composer = Composer()
 
     # 4a. AVATAR: Decide which scenes show the presenter now that we know what
-    # stock footage we have. 'auto' (default) opens on the avatar and uses 3-5
+    # stock footage we have. 'auto' (default) opens on the avatar and uses 3-8
     # avatar scenes, more when the LLM rates the footage a poor fit.
     stage("Avatar clips", upload)
     layout = getattr(args, 'avatar_clips', None) or default_avatar_layout()
@@ -250,6 +297,12 @@ async def generate_one(args):
     if final_path and not args.keep_cache:
         clean_cache()
 
+    if final_path:
+        try:
+            record_successful_topic(topic, final_path)
+        except OSError as e:
+            raise RuntimeError(f"Video was created at {final_path}, but its topic could not be recorded: {e}") from e
+
     return final_path
 
 
@@ -311,13 +364,16 @@ def parse_args(argv=None):
     parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default="private",
                         help="Privacy status for uploads (default: private).")
     parser.add_argument("--avatar-clips", choices=AVATAR_LAYOUTS,
-                        help="auto = open on the avatar, 3-5 avatar scenes in total, more where the stock footage "
+                        help="auto = open on the avatar, 3-8 avatar scenes in total, more where the stock footage "
                              "fits the narration badly; 3 = open on it + two middle scenes; 2 = two middle scenes "
                              "only; 0 = no avatar (default: AVATAR_CLIPS from .env, else auto).")
 
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
+    if args.topic and args.runs > 1:
+        # The second video would repeat the first one's topic.
+        parser.error("--topic makes a single video; leave it out for a batch")
     return args
 
 

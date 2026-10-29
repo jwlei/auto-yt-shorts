@@ -1,4 +1,5 @@
 import copy
+import glob
 import json
 import math
 import os
@@ -27,6 +28,10 @@ DEFAULT_PERSONA = (
     "and plants behind her. Medium shot, soft natural window light."
 )
 
+# Persona images to pick from when AVATAR_REFERENCE_IMAGE is unset; one is
+# chosen at random per video.
+DEFAULT_REFERENCE_IMAGES = os.path.join("assets", "avatar", "avatar*.jpg")
+
 COMFYUI_CLIENT_ID = "aishorts"
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 SEED_INPUTS = ("seed", "noise_seed")
@@ -34,14 +39,16 @@ POLL_INTERVAL = 5
 
 
 # Which scenes show the avatar:
-#   auto - opens on it, then 3-5 avatar scenes in total, picked after the stock
+#   auto - opens on it, then 3-8 avatar scenes in total, picked after the stock
 #          footage is in: scenes whose footage fits the narration badly go to the avatar
 #   3    - opens on it + two random middle scenes
 #   2    - two random middle scenes only
 #   0    - none
 AVATAR_LAYOUTS = ("auto", "3", "2", "0")
 DEFAULT_AVATAR_LAYOUT = "auto"
-AUTO_MIN, AUTO_MAX = 3, 5
+AUTO_MIN, AUTO_MAX = 3, 8
+# The random starting count tops out here; only poor footage pushes it towards AUTO_MAX.
+AUTO_BASE_MAX = 5
 # Footage rated at or below this (0-10) counts as a poor fit and pulls in the avatar.
 POOR_FIT = 4
 
@@ -59,8 +66,8 @@ def plan_avatar_scenes(script_data, fits, eligible):
     Picks the avatar scenes for the 'auto' layout. Returns sorted scene indices.
 
     - The hook (scene 1) always opens on the avatar.
-    - The total starts at a random 3 or 4; every scene with poor footage (fit <=
-      POOR_FIT, or none found) beyond that raises it, up to 5.
+    - The total starts at a random 3-5; every scene with poor footage (fit <=
+      POOR_FIT, or none found) beyond that raises it, up to 8.
     - Poorest-fitting scenes are taken first; the rest are drawn at random,
       weighted towards weaker footage, so videos don't all look the same.
 
@@ -72,7 +79,7 @@ def plan_avatar_scenes(script_data, fits, eligible):
         return []
 
     poor = sorted((i for i in eligible if i != 0 and fits.get(i, 5) <= POOR_FIT), key=lambda i: fits.get(i, 5))
-    base = random.randint(AUTO_MIN, AUTO_MAX - 1)
+    base = random.randint(AUTO_MIN, AUTO_BASE_MAX)
     count = min(AUTO_MAX, max(base, 1 + len(poor)), len(eligible))
 
     chosen = [0] if 0 in eligible else []
@@ -92,6 +99,21 @@ def plan_avatar_scenes(script_data, fits, eligible):
     print(f"🎲 Avatar plan: {len(chosen)} scenes {[script_data[i]['id'] for i in chosen]} "
           f"({weak} replace weak footage, base {base})")
     return chosen
+
+
+def pick_reference_image():
+    """
+    Returns a random image matching AVATAR_REFERENCE_IMAGE (one file or a glob
+    such as assets/avatar/avatar*.jpg), or None when nothing matches the default
+    pattern, which means text-to-video from AVATAR_PERSONA.
+    """
+    configured = os.getenv("AVATAR_REFERENCE_IMAGE")
+    matches = sorted(glob.glob(configured or DEFAULT_REFERENCE_IMAGES))
+    if not matches:
+        if configured:
+            raise RuntimeError(f"AVATAR_REFERENCE_IMAGE matches no image: {configured}")
+        return None
+    return random.choice(matches)
 
 
 def get_avatar_source():
@@ -119,8 +141,10 @@ class AvatarGenerator:
         self.workflow_path = os.getenv("COMFYUI_WORKFLOW") or os.path.join(os.getcwd(), DEFAULT_WORKFLOW)
         self.timeout = int(os.getenv("COMFYUI_TIMEOUT") or 1800)
         self.max_seconds = int(os.getenv("AVATAR_MAX_SECONDS") or 10)
+        # Shorter lines still get a clip this long; the composer trims it to the narration.
+        self.min_seconds = min(self.max_seconds, int(os.getenv("AVATAR_MIN_SECONDS") or 5))
         self.persona = os.getenv("AVATAR_PERSONA") or DEFAULT_PERSONA
-        self.reference_image = os.getenv("AVATAR_REFERENCE_IMAGE") or None
+        self.reference_image = pick_reference_image()
         # Horizontal centre of the portrait crop taken from a wider reference image (0 = left, 1 = right).
         self.focus_x = min(1.0, max(0.0, float(os.getenv("AVATAR_FOCUS_X") or 0.5)))
 
@@ -133,8 +157,6 @@ class AvatarGenerator:
         self.workflow, self.fields = self._load_workflow()
         self.lipsync = "audio" in self.fields
 
-        if self.reference_image and not os.path.exists(self.reference_image):
-            raise RuntimeError(f"AVATAR_REFERENCE_IMAGE not found: {self.reference_image}")
         if self.reference_image and "image" not in self.fields:
             print("⚠️ AVATAR_REFERENCE_IMAGE is set but the workflow map has no 'image' field — ignoring it.")
             self.reference_image = None
@@ -182,6 +204,22 @@ class AvatarGenerator:
         except requests.RequestException:
             return False
 
+    def wait_until_reachable(self):
+        """
+        The web UI starts ComfyUI when Generate is pressed and sets
+        COMFYUI_STARTUP_WAIT, since loading its models can outlast the script and
+        voice stages. Without it, an offline ComfyUI fails straight away.
+        """
+        deadline = time.time() + int(os.getenv("COMFYUI_STARTUP_WAIT") or 0)
+        if self.is_reachable():
+            return True
+        print(f"   ⏳ Waiting for ComfyUI to start at {self.url}...")
+        while time.time() < deadline:
+            time.sleep(5)
+            if self.is_reachable():
+                return True
+        return False
+
     # --- Pipeline entry point ---
 
     def generate(self, script_data, indices, brain):
@@ -194,9 +232,14 @@ class AvatarGenerator:
         becomes the reference for the rest, so the same person appears throughout.
         """
         print(f"🧑 Generating {len(indices)} avatar clip(s) with ComfyUI ({self.url})"
-              f"{', lip-synced' if self.lipsync else ''}...")
+              f"{', lip-synced' if self.lipsync else ''}"
+              f"{', persona ' + os.path.basename(self.reference_image) if self.reference_image else ''}...")
         clips = {}
         reference = None
+
+        if not self.wait_until_reachable():
+            print(f"   ❌ ComfyUI is not reachable at {self.url} — skipping avatar clips.")
+            return clips
 
         try:
             if self.reference_image:
@@ -212,7 +255,7 @@ class AvatarGenerator:
                 # Looping a lip-synced clip would put the mouth out of step with the voice.
                 print(f"   ⚠️ Scene {scene['id']} narration is longer than {self.max_seconds}s — using stock footage.")
                 continue
-            seconds = min(self.max_seconds, max(3, needed))
+            seconds = min(self.max_seconds, max(self.min_seconds, needed))
             action = brain.write_avatar_prompt(scene, seconds, speaking=self.lipsync)
             # The reference image already shows the persona; restating it fights the image.
             prompt = action if reference else f"{self.persona}\n\n{action}"

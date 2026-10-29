@@ -17,7 +17,7 @@ Automated faceless YouTube Shorts: AI script, natural narration, stock footage a
 - **Pro Transitions:** Randomly applies `xfade` (fade, slide, wipes) between scenes.
 - **Silence Removal:** Automatically trims dead air from AI voice generation.
 
-- **Avatar Injection:** Opens on your presenter and brings her back for 3-5 scenes in total, giving her the scenes where the stock footage fits the narration worst (Gemini rates the footage once it is downloaded) — generated and lip-synced with ComfyUI.
+- **Avatar Injection:** Opens on your presenter and brings her back for 3-8 scenes in total, giving her the scenes where the stock footage fits the narration worst (Gemini rates the footage once it is downloaded) — generated and lip-synced with ComfyUI.
 - **Windows Ready:** Includes specific FFmpeg flags (`yuv420p`, `faststart`) to prevent corruption errors (`0x80004005`) on Windows Media Player.
 
 ---
@@ -107,6 +107,7 @@ Required:
 Optional:
 
 - `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota or stops answering)
+- `GEMINI_FAST_MODEL` to override the fast model chain used for small yes/no checks such as "was this topic already made?" (default `gemini-3.5-flash-lite,gemini-2.5-flash-lite,gemini-3.5-flash`)
 - `GEMINI_TIMEOUT` seconds to wait for a text reply before moving on to the next model (default `90`); a model that times out or runs out of daily quota is skipped for the rest of the run
 - `VIDEO_PROVIDER` to pick the stock video source: `pixabay` (default) or `pexels`
 - `TTS_PROVIDER` to pick the voice engine: `gemini` (default, natural) or `edge` (free, more robotic)
@@ -119,7 +120,7 @@ Optional:
 
 ### 5. Optional: Generated Avatar Clips (ComfyUI)
 
-With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default (`auto`) the video **opens on the avatar** (the hook) and she appears in 3-5 scenes in total. The scenes are picked **after** the stock footage is downloaded: Gemini rates 0-10 how well each scene's footage matches its line, the total starts at a random 3 or 4 and rises (up to 5) for every scene with poor footage (rated 4 or lower, or nothing found), and the weakest-footage scenes go to the avatar first, the rest at random weighted towards weaker footage. Fixed layouts are still available: `--avatar-clips 3` (hook + two random middle scenes), `2` (two middle scenes only) or `0` (none).
+With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default (`auto`) the video **opens on the avatar** (the hook) and she appears in 3-8 scenes in total. The scenes are picked **after** the stock footage is downloaded: Gemini rates 0-10 how well each scene's footage matches its line, the total starts at a random 3-5 and rises (up to 8) for every scene with poor footage (rated 4 or lower, or nothing found), and the weakest-footage scenes go to the avatar first, the rest at random weighted towards weaker footage. Fixed layouts are still available: `--avatar-clips 3` (hook + two random middle scenes), `2` (two middle scenes only) or `0` (none).
 
 The presenter is **lip-synced** to the narration: each scene's voiceover is fed into the workflow and LTX generates her mouth and face to match it. Gemini writes a prompt for each clip that has her say the line to camera.
 
@@ -129,13 +130,14 @@ The presenter is **lip-synced** to the narration: each scene's voiceover is fed 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AVATAR_CLIPS` | `auto` | `auto` = hook + 3-5 scenes chosen by footage fit; `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
+| `AVATAR_CLIPS` | `auto` | `auto` = hook + 3-8 scenes chosen by footage fit; `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
 | `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI server (from Docker use `http://host.docker.internal:8188`) |
 | `COMFYUI_WORKFLOW` | `comfyui/avatar_lipsync.json` | API workflow; its map is the same name with `.map.json` |
-| `AVATAR_REFERENCE_IMAGE` | — | Persona image. Every clip is image-to-video from it, so the persona is the same in every video |
+| `AVATAR_REFERENCE_IMAGE` | `assets/avatar/avatar*.jpg` | Persona image, or a glob of them: each video picks one at random and every clip in it is image-to-video from that image, so the persona stays the same within a video |
 | `AVATAR_FOCUS_X` | `0.5` | Where to take the portrait crop from a wider reference image (0 = left edge, 1 = right edge). Set it to the presenter's horizontal position |
-| `AVATAR_PERSONA` | built-in description | Used when there is no reference image: the first clip is text-to-video from this, and a frame of it becomes the reference for the rest |
+| `AVATAR_PERSONA` | built-in description | Used when no reference image matches: the first clip is text-to-video from this, and a frame of it becomes the reference for the rest |
 | `AVATAR_SIZE` | `736x1280` | Render size (portrait) |
+| `AVATAR_MIN_SECONDS` | `5` | Shortest clip rendered; the composer trims it to the scene's narration |
 | `AVATAR_MAX_SECONDS` | `10` | Clip length cap; each clip is sized to its scene's narration. With lip-sync, a scene whose narration runs longer uses stock footage instead |
 | `COMFYUI_TIMEOUT` | `1800` | Seconds to wait per clip |
 
@@ -188,7 +190,7 @@ python main.py --voice en-gb-storyteller-2 --output daily_short.mp4
 | `--check` | Run preflight checks (ffmpeg, API keys, avatar) and exit. |
 | `--upload` | Upload each finished video to YouTube (see below). |
 | `--privacy` | `private` (default), `unlisted`, or `public` for uploads. |
-| `--avatar-clips` | `auto` (default: hook + 3-5 scenes, more where the stock footage fits badly), `3` (hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
+| `--avatar-clips` | `auto` (default: hook + 3-8 scenes, more where the stock footage fits badly), `3` (hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
 
 Schedule a daily short with cron:
 
@@ -203,9 +205,18 @@ Schedule a daily short with cron:
 `webapp.py` is the control panel for the whole pipeline, on the desktop or your
 phone: every option (topic, number of videos, language, voice, avatar layout and
 style, YouTube upload and privacy, advanced flags) with a hint under each, a
-"Check setup" button, a live log, ComfyUI status with a one-click start, recent
-API errors, and the videos in `0_output` (ready to upload) and `1_uploaded` to
-play or download.
+"Check setup" button, a live log, ComfyUI status, recent API errors, and the
+videos in `0_output` (ready to upload) and `1_uploaded` to play or download.
+On desktop, the options sit on the left and a run card on the right keeps
+Generate, ComfyUI status, progress and the log on the same screen.
+
+Every successfully created video records its topic and filename in
+`logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
+(`GEMINI_FAST_MODEL`) checks the new topic against that history and rejects it
+if a viewer would feel they had already seen that video (a reworded repeat
+counts; another fact in the same broad subject does not). The AI picker then
+suggests another topic (up to 3 tries); a topic you typed in yourself stops the
+run with a message. This applies to `main.py` and the daily pipeline too.
 
 ### Windows: one click
 
@@ -222,9 +233,11 @@ powershell -ExecutionPolicy Bypass -File scripts\create_shortcut.ps1
 ```
 
 The server listens on your home network, so the panel also shows the address
-to open on your phone. Set
-`COMFYUI_LAUNCHER` (e.g. `C:\ComfyUI\run_nvidia_gpu.bat`) in `.env` to get the
-"Start ComfyUI" button.
+to open on your phone. When a generation uses ComfyUI avatar clips, it starts
+ComfyUI automatically if `COMFYUI_LAUNCHER` (e.g.
+`C:\ComfyUI\run_nvidia_gpu.bat`) is set in `.env`, and the avatar stage waits up
+to 3 minutes for it to finish loading. Without a launcher, start ComfyUI
+yourself; failed avatar renders fall back to stock footage.
 
 To keep that phone address the same, give the PC a fixed IP: in your router's
 admin page, add a **DHCP reservation** for the PC's MAC address (Windows:

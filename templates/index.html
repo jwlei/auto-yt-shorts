@@ -25,17 +25,17 @@
   .hint b { color: var(--text); font-weight: 600; }
   h2 { font-size: .95rem; margin: 0 0 4px; }
   .section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 4px; }
-  .section:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+  .form-col:first-child > .section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
   .section-title { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 14px 0 0; font-weight: 700; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: .95rem; color: var(--text); }
   .check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
   .check .hint { margin-top: 2px; }
   .btns { display: flex; gap: 10px; }
-  .btns button { margin-top: 18px; }
+  .btns button { margin-top: 0; }
   .btns .ghost { flex: 0 0 34%; }
+  .run-sep { border-top: 1px solid var(--line); margin: 14px 0 12px; }
   .sys { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: .85rem; }
   .sys .item { display: flex; align-items: center; gap: 8px; }
-  .sys button { width: auto; margin: 0; padding: 7px 12px; font-size: .8rem; }
   .phone { font-size: .82rem; color: var(--muted); margin-top: 10px; }
   .phone code { color: var(--text); background: var(--panel-2); padding: 2px 6px; border-radius: 6px; user-select: all; }
   .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -56,12 +56,14 @@
   .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; }
   .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
+  .top .sub { margin-bottom: 6px; }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .apierr { font-size: .78rem; border-top: 1px solid var(--line); padding: 8px 0; word-break: break-word; }
   .apierr:first-child { border-top: 0; }
   .apierr .when { color: var(--muted); }
   .apierr .code { color: var(--err); font-weight: 600; }
   .hidden { display: none !important; }
+  .dashboard { display: flex; flex-direction: column; }
   .stepper { display: flex; gap: 4px; margin: 2px 0 12px; }
   .step { flex: 1; text-align: center; font-size: .66rem; color: var(--muted); padding-top: 7px; border-top: 3px solid var(--line); line-height: 1.25; }
   .step.done { border-color: var(--ok); color: var(--text); }
@@ -72,12 +74,44 @@
   .bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   .gpu { margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
+  /* Desktop: options on the left in two columns, and a sticky run card on the
+     right (Generate, ComfyUI, progress, log) so the controls and the status
+     share one screen. Phones keep the single column. */
+  @media (min-width: 1000px) {
+    .wrap { max-width: 1480px; padding: 14px 24px 32px; }
+    .top { align-items: baseline; margin-bottom: 12px; }
+    .top .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+    .top .sub { margin: 0; }
+    .dashboard {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1fr);
+      align-items: start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .dashboard > .card { margin-bottom: 0; min-width: 0; }
+    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+    #form input:not([type=checkbox]), #form select { padding: 9px 11px; font-size: .95rem; }
+    #form label { margin: 9px 0 4px; }
+    #form .section { margin-top: 12px; }
+    #form .form-col > .section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+    #form .section-title { margin-top: 10px; }
+    .run-card {
+      position: sticky;
+      top: 14px;
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 28px);
+      overflow: auto;
+    }
+    .run-card pre.log { flex: 1 1 auto; min-height: 140px; max-height: none; }
+  }
 </style>
 
 <div class="top">
-  <div>
+  <div class="title">
     <h1>🎬 Auto YT Shorts</h1>
-    <p class="sub" style="margin-bottom:6px">Pick your options, press Generate, and watch it work. Finished videos appear at the bottom.</p>
+    <p class="sub">Pick your options, press Generate, and watch it work. Finished videos appear at the bottom.</p>
   </div>
   <div style="display:flex;gap:14px;align-items:center">
     <a href="#" id="shutdown" title="Stops the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
@@ -85,130 +119,133 @@
   </div>
 </div>
 
-<div class="card">
-  <div class="sys">
-    <div class="item"><span class="dot" id="comfyDot"></span><span id="comfyText">ComfyUI: checking…</span></div>
-    <button class="ghost hidden" id="comfyStart" type="button">Start ComfyUI</button>
-  </div>
-  <div class="hint" id="comfyHint">ComfyUI renders the avatar clips on your GPU. It must be running for avatar videos — otherwise those scenes fall back to stock footage.</div>
-  <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
-</div>
-
+<div class="dashboard">
 <form class="card" id="form">
-  <div class="section">
-    <div class="section-title">What to make</div>
+  <div class="form-col">
+    <div class="section" id="formTopic">
+      <div class="section-title">What to make</div>
 
-    <label for="topic">Topic</label>
-    <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
-    <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you.</div>
+      <label for="topic">Topic</label>
+      <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
+      <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you. Topics of videos already made are never repeated (<code>logs/generated_topics.jsonl</code>).</div>
 
-    <div class="row">
-      <div>
-        <label for="runs">How many videos</label>
-        <input id="runs" name="runs" type="number" min="1" max="10" value="1" inputmode="numeric">
-      </div>
-      <div>
-        <label for="lang">Language</label>
-        <select id="lang" name="lang">
-          <option value="en-GB">English (UK)</option>
-          <option value="en-US">English (US)</option>
-        </select>
-      </div>
-    </div>
-    <div class="hint">Each video takes ~15–25 min with avatars. The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Voice</div>
-    <label for="voice">Narrator</label>
-    <select id="voice" name="voice">
-      {% for value, label in voices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-    </select>
-    <div class="hint">Natural Gemini voices. If Gemini 3.8 Flash TTS is out of quota or slow, the same voice is used through 3.8 Flash Lite TTS. If both fail, the run stops — it never falls back to a robotic voice.</div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Avatar (presenter)</div>
-    <label for="avatar_clips">When she appears</label>
-    <select id="avatar_clips" name="avatar_clips">
-      <option value="auto">Auto — opens the video, 3–5 clips, more where stock footage is weak</option>
-      <option value="3">Opens the video + 2 middle scenes (3 clips)</option>
-      <option value="2">2 middle scenes only (2 clips)</option>
-      <option value="0">No avatar — stock footage only</option>
-    </select>
-    <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage — a random 3 or 4 scenes, up to 5 when the footage is poor. The opening (hook) scene is always her. Each clip adds ~4–5 min of GPU time, so auto adds ~15–25 min per video.</div>
-
-    <div id="avatarOpts">
       <div class="row">
         <div>
-          <label for="avatar_source">Source</label>
-          <select id="avatar_source" name="avatar_source">
-            <option value="comfyui">Generate with ComfyUI</option>
-            <option value="static" {% if not static_avatar %}disabled{% endif %}>Static clip (avatars.mp4){% if not static_avatar %} — not found{% endif %}</option>
-          </select>
+          <label for="runs">How many videos</label>
+          <input id="runs" name="runs" type="number" min="1" max="10" value="1" inputmode="numeric">
         </div>
         <div>
-          <label for="avatar_style">Style</label>
-          <select id="avatar_style" name="avatar_style">
-            <option value="lipsync">Speaks the line (lip-sync)</option>
-            <option value="reaction">Silent reactions</option>
+          <label for="lang">Language</label>
+          <select id="lang" name="lang">
+            <option value="en-GB">English (UK)</option>
+            <option value="en-US">English (US)</option>
           </select>
         </div>
       </div>
-      <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
+      <div class="hint">Each video takes ~15–45 min with avatars. The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
     </div>
-  </div>
 
-  <div class="section">
-    <div class="section-title">Publish</div>
-    <label class="check">
-      <input type="checkbox" name="upload" id="upload">
-      <span>Upload to YouTube when done
-        <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run authorize_youtube.py once).</div>
-      </span>
-    </label>
-    <div id="privacyWrap" class="hidden">
-      <label for="privacy">Privacy</label>
-      <select id="privacy" name="privacy">
-        <option value="private">Private — only you</option>
-        <option value="unlisted">Unlisted — anyone with the link</option>
-        <option value="public">Public</option>
+    <div class="section" id="formVoice">
+      <div class="section-title">Voice</div>
+      <label for="voice">Narrator</label>
+      <select id="voice" name="voice">
+        {% for value, label in voices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
       </select>
-      <div class="hint">YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
+      <div class="hint">Natural Gemini voices. If Gemini 3.8 Flash TTS is out of quota or slow, the same voice is used through 3.8 Flash Lite TTS. If both fail, the run stops — it never falls back to a robotic voice.</div>
     </div>
   </div>
 
-  <div class="section">
-    <details>
-      <summary>Advanced</summary>
-      <label for="output">File name (single video only)</label>
-      <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS.mp4" autocomplete="off">
-      <div class="hint">Leave empty for a timestamped name. Saved in <code>0_output</code>.</div>
+  <div class="form-col">
+    <div class="section" id="formAvatar">
+      <div class="section-title">Avatar (presenter)</div>
+      <label for="avatar_clips">When she appears</label>
+      <select id="avatar_clips" name="avatar_clips">
+        <option value="auto">Auto — opens the video, 3–8 clips, more where stock footage is weak</option>
+        <option value="3">Opens the video + 2 middle scenes (3 clips)</option>
+        <option value="2">2 middle scenes only (2 clips)</option>
+        <option value="0">No avatar — stock footage only</option>
+      </select>
+      <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage — a random 3–5 scenes, up to 8 when the footage is poor. The opening (hook) scene is always her. Each 5–10 s clip adds ~4–5 min of GPU time, so auto adds ~15–40 min per video. Each video uses a random <code>assets/avatar/avatar*.jpg</code> as her look.</div>
 
+      <div id="avatarOpts">
+        <div class="row">
+          <div>
+            <label for="avatar_source">Source</label>
+            <select id="avatar_source" name="avatar_source">
+              <option value="comfyui">Generate with ComfyUI</option>
+              <option value="static" {% if not static_avatar %}disabled{% endif %}>Static clip (avatars.mp4){% if not static_avatar %} — not found{% endif %}</option>
+            </select>
+          </div>
+          <div>
+            <label for="avatar_style">Style</label>
+            <select id="avatar_style" name="avatar_style">
+              <option value="lipsync">Speaks the line (lip-sync)</option>
+              <option value="reaction">Silent reactions</option>
+            </select>
+          </div>
+        </div>
+        <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
+      </div>
+    </div>
+
+    <div class="section" id="formPublish">
+      <div class="section-title">Publish</div>
       <label class="check">
-        <input type="checkbox" name="fail_fast">
-        <span>Stop the batch at the first failed video
-          <div class="hint">Otherwise a failed video is skipped and the batch carries on.</div>
+        <input type="checkbox" name="upload" id="upload">
+        <span>Upload to YouTube when done
+          <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run authorize_youtube.py once).</div>
         </span>
       </label>
-      <label class="check">
-        <input type="checkbox" name="keep_cache">
-        <span>Keep intermediate files
-          <div class="hint">Keeps the voice clips, stock footage and avatar clips in <code>assets/</code> for debugging. Normally they are deleted after each video.</div>
-        </span>
-      </label>
-    </details>
+      <div id="privacyWrap" class="hidden">
+        <label for="privacy">Privacy</label>
+        <select id="privacy" name="privacy">
+          <option value="private">Private — only you</option>
+          <option value="unlisted">Unlisted — anyone with the link</option>
+          <option value="public">Public</option>
+        </select>
+        <div class="hint">YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
+      </div>
+    </div>
+
+    <div class="section" id="formAdvanced">
+      <details>
+        <summary>Advanced</summary>
+        <label for="output">File name (single video only)</label>
+        <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS.mp4" autocomplete="off">
+        <div class="hint">Leave empty for a timestamped name. Saved in <code>0_output</code>.</div>
+
+        <label class="check">
+          <input type="checkbox" name="fail_fast">
+          <span>Stop the batch at the first failed video
+            <div class="hint">Otherwise a failed video is skipped and the batch carries on.</div>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="keep_cache">
+          <span>Keep intermediate files
+            <div class="hint">Keeps the voice clips, stock footage and avatar clips in <code>assets/</code> for debugging. Normally they are deleted after each video.</div>
+          </span>
+        </label>
+      </details>
+    </div>
   </div>
+</form>
 
+<div class="card run-card">
   <div class="btns">
     <button type="button" class="ghost" id="check">Check setup</button>
-    <button type="submit" id="go">Generate</button>
+    <button type="submit" form="form" id="go">Generate</button>
   </div>
   <div class="hint" style="text-align:center">“Check setup” verifies keys, ffmpeg and ComfyUI for these options without making anything.</div>
   <div class="err" id="formError" hidden></div>
-</form>
 
-<div class="card">
+  <div class="run-sep"></div>
+  <div class="sys">
+    <div class="item"><span class="dot" id="comfyDot"></span><span id="comfyText">ComfyUI: checking…</span></div>
+  </div>
+  <div class="hint" id="comfyHint">Renders the avatar clips on your GPU. Generate starts it when the run needs avatar clips (set <code>COMFYUI_LAUNCHER</code> in .env); otherwise start it yourself. Failed avatar renders fall back to stock footage.</div>
+
+  <div class="run-sep"></div>
   <div class="status">
     <span class="dot" id="dot"></span>
     <span id="statusText">Idle</span>
@@ -226,6 +263,8 @@
   <div class="hint gpu" id="gpuLine"></div>
   <pre class="log" id="log">No run yet.</pre>
   <button class="ghost" id="stop" hidden>Stop run</button>
+  <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
+</div>
 </div>
 
 <div class="card" id="apiCard" hidden>
@@ -411,8 +450,9 @@ async function poll() {
 
   const c = data.comfyui;
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : 'fail');
-  $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running' : 'not running');
-  $('comfyStart').classList.toggle('hidden', c.online || !c.can_start);
+  $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running'
+    : c.starting ? 'starting… (loading models)'
+    : c.can_start ? 'not running (Generate starts it)' : 'not running');
 
   $('apiCard').hidden = !data.api_errors.length;
   $('apiCount').textContent = data.api_errors.length;
@@ -448,12 +488,6 @@ $('stop').addEventListener('click', async () => {
   if (!confirm('Stop the current run?')) return;
   await fetch('/stop', { method: 'POST' });
   poll();
-});
-$('comfyStart').addEventListener('click', async () => {
-  $('comfyStart').disabled = true;
-  $('comfyText').textContent = 'ComfyUI: starting… (takes ~30s)';
-  await fetch('/comfyui/start', { method: 'POST' });
-  setTimeout(() => { $('comfyStart').disabled = false; poll(); }, 3000);
 });
 
 $('shutdown').addEventListener('click', async e => {

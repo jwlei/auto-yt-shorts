@@ -30,12 +30,16 @@ def _get_client():
         raise RuntimeError("GEMINI_API_KEY is not set. Create a .env file or set the environment variable before running.")
     return genai.Client(api_key=api_key)
 
-def _get_models():
+# Small yes/no decisions (is this topic a repeat?) don't need the big models or
+# their 20/day quota. Override with GEMINI_FAST_MODEL.
+DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash")
+
+def _get_models(env_var="GEMINI_MODEL", defaults=DEFAULT_MODELS):
     # An unset CI variable arrives as an empty string, not as None.
-    configured = os.getenv("GEMINI_MODEL")
+    configured = os.getenv(env_var)
     if configured:
         return [m.strip() for m in configured.split(",") if m.strip()]
-    return list(DEFAULT_MODELS)
+    return list(defaults)
 
 def _is_retryable(error):
     status = getattr(error, "code", None) or getattr(error, "status_code", None)
@@ -89,7 +93,7 @@ def _call_with_deadline(fn, seconds):
     return result["value"]
 
 
-def _generate(prompt, retries=4):
+def _generate(prompt, retries=4, models=None):
     """
     Calls Gemini, waiting out the overload and per-minute rate limits that a
     scheduled run hits regularly. A model whose daily quota is used up, that
@@ -100,7 +104,7 @@ def _generate(prompt, retries=4):
     timeout = int(os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT)
     errors = []
 
-    for model in _get_models():
+    for model in models or _get_models():
         if model in _skipped_models:
             continue
         for attempt in range(retries):
@@ -127,16 +131,59 @@ def _generate(prompt, retries=4):
     raise RuntimeError(f"Gemini failed on every model ({', '.join(errors)}). See logs/api_errors.log.")
 
 class ContentBrain:
-    def get_trending_topic(self):
+    def get_trending_topic(self, excluded_topics=()):
         """
         In a full build, this would scrape Google Trends or Twitter.
         For now, we ask Gemini to pick a viral niche topic.
         """
-        prompts = "Give me 1 specific, viral, and engaging topic for a Short Documentary. It should be a 'Engaging Did you know' fact or a 'Fun/intriguing Engaging News'. return ONLY the topic name."
+        prompts = "Give me 1 specific, viral, and engaging topic for a Short Documentary. It should be a 'Engaging Did you know' fact or a 'Fun/intriguing Engaging News'. Return ONLY the topic name."
+        excluded_topics = [topic.strip() for topic in excluded_topics if topic.strip()]
+        if excluded_topics:
+            prompts += "\nDo not repeat any of these previously used topics, including exact wording:\n"
+            prompts += "\n".join(f"- {topic}" for topic in excluded_topics)
         response = _generate(prompts)
         topic = response.text.strip()
         print(f"🎯 Selected Topic: {topic}")
         return topic
+
+    def find_repeat_topic(self, topic, used_topics):
+        """
+        Asks a fast model whether `topic` is the same video topic as one already
+        made (a rewording or the same fact counts; a different fact in the same
+        broad area does not). Returns the matching used topic, or None.
+        Raises if no fast model answers, so the caller decides how to fail.
+        """
+        used_topics = [t.strip() for t in used_topics if t.strip()]
+        if not used_topics:
+            return None
+
+        numbered = "\n".join(f"{n}. {t}" for n, t in enumerate(used_topics, 1))
+        prompt = f"""
+    A YouTube Shorts channel must not make two videos about the same topic.
+
+    Candidate topic: {topic}
+
+    Topics already made:
+    {numbered}
+
+    Is the candidate the SAME topic as one already made? Same topic means a viewer would
+    feel they had already seen this video: the same fact, story, event or question, even
+    if worded differently. A different fact within the same broad subject (e.g. another
+    octopus fact) is NOT the same topic.
+
+    Return ONLY strict JSON: {{"same": true, "match": <number of the matching topic>}}
+    or {{"same": false, "match": null}}
+    """
+        response = _generate(prompt, retries=2, models=_get_models("GEMINI_FAST_MODEL", DEFAULT_FAST_MODELS))
+        verdict = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        if not isinstance(verdict, dict) or not isinstance(verdict.get("same"), bool):
+            raise ValueError(f"unexpected repeat-check reply: {response.text[:200]}")
+        if not verdict["same"]:
+            return None
+        match = verdict.get("match")
+        if isinstance(match, int) and 1 <= match <= len(used_topics):
+            return used_topics[match - 1]
+        return "an earlier video"
 
     def generate_script(self, topic, lang="en-GB"):
         """
