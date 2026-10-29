@@ -44,6 +44,9 @@ FOLDERS = {"output": OUTPUT_DIR, "uploaded": UPLOADED_DIR}
 # server itself runs windowless (start_webapp.pyw).
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 API_ERROR_LOG = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
+# start_webapp.pyw compares this with the code on disk to replace a server that
+# predates an update (templates are cached and Python only loads at start).
+STARTED_AT = time.time()
 
 # Gemini voices only: edge-tts is never used.
 VOICES = [
@@ -590,6 +593,24 @@ def shutdown():
     # Reply first, then exit, so the browser gets its answer.
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"ok": True}
+
+
+@app.route("/launcher/refresh", methods=["POST"])
+def launcher_refresh():
+    """
+    Exits if the code changed after this server started, so start_webapp.pyw can
+    start a fresh one. Only answers this PC, and never stops a run.
+    """
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        abort(403)
+    try:
+        code_changed_at = float(request.form.get("code_changed_at", 0))
+    except ValueError:
+        abort(400)
+    if code_changed_at <= STARTED_AT or job.running:
+        return {"restarting": False}
+    threading.Timer(0.5, os._exit, args=(0,)).start()
+    return {"restarting": True}
 
 
 @app.route("/api/status")
