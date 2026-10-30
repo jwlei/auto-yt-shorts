@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
+from modules.api_log import log_api_call, log_api_error
 from modules.paths import move_to_uploaded
 
 # Uploading is the only scope this needs. Keeping it narrow means the consent
@@ -108,6 +109,7 @@ class YouTubeUploader:
                     print(f"   ⚠️ Transient upload error ({e.resp.status}). Retrying in {wait}s...")
                     time.sleep(wait)
                     continue
+                log_api_error("YouTube", "uploads", e)
                 print(f"❌ Upload failed: {e}")
                 return None
             except Exception as e:
@@ -119,6 +121,7 @@ class YouTubeUploader:
             print(f"❌ Upload returned no video id: {response}")
             return None
 
+        log_api_call("YouTube", "uploads")
         url = f"https://youtube.com/shorts/{video_id}"
         print(f"✅ Uploaded: {url}")
         return url

@@ -30,7 +30,7 @@ auto-yt-shorts/
 ├── 0_output/               # Finished videos waiting to be uploaded
 ├── 1_uploaded/             # Videos moved here once uploaded (+ upload_history.json)
 ├── comfyui/                # ComfyUI avatar workflows (API format) + node maps
-├── logs/                   # api_errors.log — every Gemini API error with the server's message
+├── logs/                   # api_errors.log — every API error with the server's message; api_usage.jsonl — calls counted for the quota list
 ├── assets/                  # Stores all media files
 │   ├── audio_clips/         # Generated voiceovers (.wav)
 │   ├── video_clips/         # Downloaded stock footage (.mp4)
@@ -218,6 +218,13 @@ During a run the panel shows an ETA for each step and for the whole run, includi
 any videos still to come. Finished steps are timed and saved to
 `logs/stage_timings.json`, so the estimates start rough and get better with each run.
 Delete that file to start over.
+
+The left column lists today's quota per model: Gemini text and voice models, the stock
+provider and YouTube upload units. Google has no API for what is left of a quota, so
+Gemini and YouTube are counted from this app's own successful calls
+(`logs/api_usage.jsonl`), and a daily-limit error from Google marks a model as used up,
+with the limit it states replacing the free-tier figure. Calls from other apps on the
+same key aren't counted. Stock figures come from the provider's response headers.
 
 Uploads from the panel run `publish.py`, which you can also use directly:
 `python publish.py short_20261029_233100.mp4 --privacy unlisted` or

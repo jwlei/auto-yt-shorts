@@ -9,7 +9,8 @@ import mutagen
 import requests
 from dotenv import load_dotenv
 
-from modules.api_log import is_daily_quota, log_api_error
+from modules.api_log import is_daily_quota, log_api_call, log_api_error
+from modules.gemini_models import get_tts_models
 
 load_dotenv()
 
@@ -17,9 +18,6 @@ load_dotenv()
 # edge-tts is never used as a fallback: if every Gemini model fails, the run fails.
 TTS_PROVIDERS = ("gemini", "edge")
 DEFAULT_TTS_PROVIDER = "gemini"
-# Tried in order. Both share the voice library, so a fallback keeps the same voice.
-# Override with GEMINI_TTS_MODEL (one model or a comma-separated chain).
-DEFAULT_GEMINI_TTS_MODELS = ("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts")
 INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 # Default narrators from Gemini's voice library (en-GB: female presenter, Winchester accent).
@@ -52,13 +50,6 @@ class GeminiTTSError(Exception):
 
 class NarrationSplitError(Exception):
     """The single take could not be cut into scenes reliably."""
-
-
-def get_gemini_tts_models():
-    configured = os.getenv("GEMINI_TTS_MODEL")
-    if configured:
-        return [m.strip() for m in configured.split(",") if m.strip()]
-    return list(DEFAULT_GEMINI_TTS_MODELS)
 
 
 def get_tts_provider():
@@ -149,7 +140,7 @@ class AudioEngine:
                              or (voice if voice and not is_edge_voice else None)
                              or GEMINI_VOICES.get(lang, GEMINI_VOICES["en-GB"]))
         self.style = os.getenv("GEMINI_TTS_STYLE") or DEFAULT_STYLE
-        self.gemini_models = get_gemini_tts_models()
+        self.gemini_models = get_tts_models()
         self.timeout = int(os.getenv("GEMINI_TTS_TIMEOUT") or DEFAULT_GEMINI_TTS_TIMEOUT)
         self.min_interval = 60.0 / max(1, int(os.getenv("GEMINI_TTS_RPM") or DEFAULT_GEMINI_TTS_RPM))
         self.last_request = {}
@@ -204,6 +195,7 @@ class AudioEngine:
                     error = GeminiTTSError(model, 200, "response contained no audio")
                     log_api_error("Gemini TTS", model, error)
                     raise error
+                log_api_call("Gemini TTS", model)
                 return base64.b64decode(audio)
 
             try:

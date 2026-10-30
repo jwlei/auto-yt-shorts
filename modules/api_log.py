@@ -1,14 +1,19 @@
+import json
 import os
 import re
+import time
 from datetime import datetime
 
-LOG_PATH = os.path.join(os.getcwd(), "logs", "api_errors.log")
+from modules.paths import PROJECT_ROOT
+
+LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
+USAGE_PATH = os.path.join(PROJECT_ROOT, "logs", "api_usage.jsonl")
 
 
 def is_daily_quota(error):
-    """True for a 429 that is about the per-day limit: retrying today is pointless."""
+    """True for an error about the per-day limit: retrying today is pointless. (The last two are YouTube's.)"""
     text = str(error).lower()
-    return "per day" in text or "perday" in text
+    return any(mark in text for mark in ("per day", "perday", "quotaexceeded", "dailylimitexceeded"))
 
 
 def _short_wait(text):
@@ -44,6 +49,16 @@ def summarize_api_error(message):
         return "Model overloaded, try again shortly"
     first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
     return first if len(first) <= 160 else first[:157] + "..."
+
+
+def log_api_call(service, model, **limits):
+    """Appends one successful call to logs/api_usage.jsonl, which the panel's quota list counts."""
+    try:
+        os.makedirs(os.path.dirname(USAGE_PATH), exist_ok=True)
+        with open(USAGE_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": round(time.time()), "service": service, "model": model, **limits}) + "\n")
+    except OSError:
+        pass  # Logging must never break a run
 
 
 def log_api_error(service, model, error):

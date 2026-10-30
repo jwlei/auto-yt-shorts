@@ -37,6 +37,7 @@ from flask import (Flask, abort, redirect, render_template, request,
 
 from modules.api_log import summarize_api_error
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR
+from modules.quota import quota_summary
 from modules.run_eta import RunEta
 from modules.topic_history import read_history
 
@@ -530,6 +531,17 @@ def recent_api_errors(count=12):
     return errors
 
 
+_quota_cache = {"at": 0.0, "value": None}
+
+
+def cached_quota():
+    # Cached briefly: every open browser polls status every 2s.
+    if time.time() - _quota_cache["at"] > 5:
+        _quota_cache["value"] = quota_summary()
+        _quota_cache["at"] = time.time()
+    return _quota_cache["value"]
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     expected = os.getenv("APP_PASSWORD")
@@ -723,6 +735,7 @@ def status():
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
     payload["api_errors"] = recent_api_errors()
+    payload["quota"] = cached_quota()
     return payload
 
 

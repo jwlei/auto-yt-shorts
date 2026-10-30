@@ -14,6 +14,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
+from modules.api_log import log_api_call, log_api_error
+
 
 # Scopes required to upload to YouTube
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
@@ -139,6 +141,7 @@ def _resumable_upload(request, video_path):
                     pass
 
                 if error_reason in ('quotaExceeded', 'dailyLimitExceeded'):
+                    log_api_error("YouTube", "uploads", e)
                     print(f"   ❌ API quota exceeded! ({error_reason})")
                     print("   ⏳ The daily quota resets at midnight Pacific Time (PT).")
                     print("   💡 Tip: You can request a quota increase in the Google Cloud Console.")
@@ -251,6 +254,7 @@ def upload_video(youtube, video_path, title, description, tags,
             raise
 
     if response:
+        log_api_call("YouTube", "uploads")
         video_id = response.get('id')
         print(f"   🎉 Upload complete! ID: {video_id}")
         print(f"   🔗 Link: https://youtu.be/{video_id}")

@@ -6,6 +6,8 @@ import requests
 import random
 from dotenv import load_dotenv
 
+from modules.api_log import log_api_call
+
 # Stock video source, chosen with VIDEO_PROVIDER in .env. Each provider needs its own key.
 PROVIDER_KEYS = {
     "pexels": "PEXELS_API_KEY",
@@ -46,6 +48,17 @@ class AssetManager:
         self.cache_dir = os.path.join(os.getcwd(), "assets", "search_cache", self.provider)
         os.makedirs(self.cache_dir, exist_ok=True)
 
+    def _log_limits(self, response):
+        """Both providers report their limit in the response headers, for the panel's quota list."""
+        try:
+            limit, remaining, reset = (int(response.headers[f"X-RateLimit-{name}"])
+                                       for name in ("Limit", "Remaining", "Reset"))
+        except (KeyError, ValueError):
+            return
+        # Pixabay's reset is seconds from now, Pexels' a timestamp.
+        log_api_call("Stock", self.label, limit=limit, remaining=remaining,
+                     resets_at=reset if reset > 10 ** 9 else round(time.time()) + reset)
+
     # --- Provider APIs ---
     # Each returns a list of candidates: {"duration", "width", "height", "url", "tags"},
     # or None on API errors. "tags" describes what the clip shows, so the LLM can
@@ -60,6 +73,7 @@ class AssetManager:
         }
         response = requests.get("https://api.pexels.com/videos/search",
                                 headers={"Authorization": self.api_key}, params=params, timeout=10)
+        self._log_limits(response)
         if response.status_code != 200:
             print(f"      ⚠️ API Error: {response.status_code}")
             return None
@@ -88,6 +102,7 @@ class AssetManager:
             "per_page": 20,        # Pixabay has no orientation filter, so fetch more to find portrait clips
         }
         response = requests.get("https://pixabay.com/api/videos/", params=params, timeout=10)
+        self._log_limits(response)
         if response.status_code == 429:
             reset = response.headers.get("X-RateLimit-Reset", "?")
             print(f"      ⚠️ Pixabay rate limit hit. Resets in {reset}s.")

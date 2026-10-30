@@ -6,15 +6,10 @@ import time
 from google import genai
 from dotenv import load_dotenv
 
-from modules.api_log import is_daily_quota, log_api_error
+from modules.api_log import is_daily_quota, log_api_call, log_api_error
+from modules.gemini_models import get_fast_models, get_text_models
 
 load_dotenv()
-
-# Tried in order; each has its own free-tier daily quota (20/day for the Flash
-# models, 500/day for 3.5 Flash Lite), so a used-up model just hands over to the
-# next. Override with GEMINI_MODEL (one model or a comma-separated chain).
-DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-3.5-flash", "gemini-3-flash-preview",
-                  "gemini-2.5-flash", "gemini-3.5-flash-lite")
 
 # Gemini returns these when it is overloaded or rate-limiting rather than when
 # the request itself is wrong, so they are worth waiting out.
@@ -36,17 +31,6 @@ def _get_client():
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set. Create a .env file or set the environment variable before running.")
     return genai.Client(api_key=api_key)
-
-# Small yes/no decisions (is this topic a repeat?) don't need the big models or
-# their 20/day quota. Override with GEMINI_FAST_MODEL.
-DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash")
-
-def _get_models(env_var="GEMINI_MODEL", defaults=DEFAULT_MODELS):
-    # An unset CI variable arrives as an empty string, not as None.
-    configured = os.getenv(env_var)
-    if configured:
-        return [m.strip() for m in configured.split(",") if m.strip()]
-    return list(defaults)
 
 def _is_retryable(error):
     status = getattr(error, "code", None) or getattr(error, "status_code", None)
@@ -111,13 +95,15 @@ def _generate(prompt, retries=4, models=None):
     timeout = int(os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT)
     errors = []
 
-    for model in models or _get_models():
+    for model in models or get_text_models():
         if model in _skipped_models:
             continue
         for attempt in range(retries):
             try:
-                return _call_with_deadline(
+                response = _call_with_deadline(
                     lambda: client.models.generate_content(model=model, contents=prompt), timeout)
+                log_api_call("Gemini", model)
+                return response
             except Exception as e:
                 log_api_error("Gemini", model, e)
                 if isinstance(e, TimeoutError):
@@ -181,7 +167,7 @@ class ContentBrain:
     Return ONLY strict JSON: {{"same": true, "match": <number of the matching topic>}}
     or {{"same": false, "match": null}}
     """
-        response = _generate(prompt, retries=2, models=_get_models("GEMINI_FAST_MODEL", DEFAULT_FAST_MODELS))
+        response = _generate(prompt, retries=2, models=get_fast_models())
         verdict = json.loads(response.text.replace('```json', '').replace('```', '').strip())
         if not isinstance(verdict, dict) or not isinstance(verdict.get("same"), bool):
             raise ValueError(f"unexpected repeat-check reply: {response.text[:200]}")

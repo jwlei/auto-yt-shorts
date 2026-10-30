@@ -99,6 +99,16 @@
   .bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   .gpu { margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
+  .q-group { font-size: .72rem; color: var(--muted); margin: 9px 0 2px; }
+  .q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; font-size: .78rem; padding: 2px 0; }
+  .q-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .q-val { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .q-bar { grid-column: 1 / -1; height: 3px; background: #0a0b0f; border-radius: 2px; overflow: hidden; }
+  .q-bar > div { height: 100%; background: var(--ok); }
+  .q-row.low .q-val { color: #f2b84b; }
+  .q-row.low .q-bar > div { background: #f2b84b; }
+  .q-row.out .q-val { color: var(--err); }
+  .q-row.out .q-bar > div { background: var(--err); }
   /* Desktop: options (two columns), the run card (Generate, ComfyUI, progress,
      log) and, from 1280px, the portrait videos on the far right, all on one
      screen. Narrower desktops put the videos underneath. Phones keep one column. */
@@ -116,7 +126,9 @@
     .dashboard > .card { margin-bottom: 0; min-width: 0; }
     .videos-card { grid-column: 1 / -1; }
     .vid { flex-basis: 260px; }
-    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
+    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto 1fr; gap: 0 22px; }
+    #form > .form-col:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+    #formQuota { grid-column: 1; grid-row: 2; }
     #form input:not([type=checkbox]), #form select { padding: 9px 11px; font-size: .95rem; }
     #form label { margin: 9px 0 4px; }
     #form .section { margin-top: 12px; }
@@ -270,6 +282,12 @@
         </label>
       </details>
     </div>
+  </div>
+
+  <div class="section" id="formQuota">
+    <div class="section-title">Quota today</div>
+    <div id="quota"></div>
+    <div class="hint"><span id="quotaReset"></span> Google doesn't report what's left, so Gemini and YouTube are counted from this app's own calls; other apps on the same key aren't included. "Limit hit" comes from Google itself. Stock footage figures come from the provider.</div>
   </div>
 </form>
 
@@ -557,6 +575,29 @@ function renderNow(data) {
     : '';
 }
 
+// --- Quota ---
+function quotaRow(r) {
+  const share = r.limit ? Math.min(r.used / r.limit, 1) : 0;
+  const state = r.out ? 'out' : share >= .8 ? 'low' : '';
+  const period = r.period ? ` ${r.period}` : '';
+  const value = r.limit ? `${r.used.toLocaleString()} / ${r.limit.toLocaleString()}${period}`
+    : r.out ? 'limit hit' : `${r.used.toLocaleString()} used${period}`;
+  const bar = r.limit ? `<div class="q-bar"><div style="width:${Math.round(share * 100)}%"></div></div>` : '';
+  return `<div class="q-row ${state}"><span class="q-name" title="${esc(r.name)}">${esc(r.name)}</span>
+    <span class="q-val">${value}${r.out && r.limit ? ' · limit hit' : ''}</span>${bar}</div>`;
+}
+let lastQuota = '';
+function renderQuota(q) {
+  const key = JSON.stringify(q.groups);
+  if (key !== lastQuota) {
+    $('quota').innerHTML = q.groups.map(g =>
+      `<div class="q-group">${esc(g.title)}</div>${g.rows.map(quotaRow).join('')}`).join('');
+    lastQuota = key;
+  }
+  const at = new Date(Date.now() + q.resets_in * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  $('quotaReset').textContent = `Gemini and YouTube reset at midnight Pacific: ${fmtEta(q.resets_in)} from now (${at} your time).`;
+}
+
 // --- Log ---
 function lineKind(text) {
   const s = text.trim();
@@ -629,6 +670,8 @@ async function poll() {
   $('apiErrors').innerHTML = data.api_errors.map(e => `
     <div class="apierr"><span class="when">${esc(e.when)}</span> · ${esc(e.service)} <b>${esc(e.model)}</b>
       <span class="code">${esc(e.status)}</span><br>${esc(e.message)}</div>`).join('');
+
+  renderQuota(data.quota);
 
   lastVideos = data.videos;
   renderVideos();
