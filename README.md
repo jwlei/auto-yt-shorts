@@ -28,7 +28,8 @@ Automated faceless YouTube Shorts: AI script, natural narration, stock footage a
 auto-yt-shorts/
 │
 ├── 0_output/               # Finished videos waiting to be uploaded
-├── 1_uploaded/             # Videos moved here once uploaded (+ upload_history.json)
+├── 1_uploaded/             # Videos moved here once uploaded, each with its thumbnail (+ upload_history.json)
+├── 2_badOutput/            # Videos rejected after watching, and notes.md: what was wrong and what changed
 ├── comfyui/                # ComfyUI avatar workflows (API format) + node maps
 ├── logs/                   # api_errors.log — every API error with the server's message; api_usage.jsonl — calls counted for the quota list
 ├── assets/                  # Stores all media files
@@ -44,6 +45,14 @@ auto-yt-shorts/
 │   ├── avatar_generator.py  # ComfyUI presenter clips (lip-synced)
 │   └── composer.py          # FFmpeg Video Editor (Stitching & Transitions)
 │
+├── documents/               # Code of conduct, contributing guide, security policy
+├── scripts/                 # One-off setup: YouTube authorization, VM install, desktop shortcut
+├── legacy/                  # The old upload scripts and scratch files; the panel and main.py don't use them
+├── templates/               # The control panel's pages
+│
+├── webapp.py                # The control panel
+├── start_webapp.pyw         # Starts the panel with no console window
+├── publish.py               # Uploads finished videos
 ├── main.py                  # Entry point (Orchestrator)
 └── requirements.txt         # Python dependencies
 
@@ -106,8 +115,8 @@ Required:
 
 Optional:
 
-- `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota or stops answering)
-- `GEMINI_FAST_MODEL` to override the fast model chain used for small yes/no checks such as "was this topic already made?" (default `gemini-3.5-flash-lite,gemini-2.5-flash-lite,gemini-3.5-flash`)
+- `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota or stops answering)
+- `GEMINI_FAST_MODEL` to override the fast model chain used for small yes/no checks such as "was this topic already made?" (default `gemini-3.5-flash-lite,gemini-3.5-flash`)
 - `GEMINI_TIMEOUT` seconds to wait for a text reply before moving on to the next model (default `90`); a model that times out or runs out of daily quota is skipped for the rest of the run
 - `VIDEO_PROVIDER` to pick the stock video source: `pixabay` (default) or `pexels`
 - `TTS_PROVIDER` to pick the voice engine: `gemini` (default, natural) or `edge` (free, more robotic)
@@ -146,7 +155,7 @@ She stays on screen for a random 3-6 seconds each time (`AVATAR_MIN_SECONDS`/`MA
 | `AVATAR_MAX_SECONDS` | `6` | Longest time she stays on screen each time. A longer line cuts to stock footage while her voice carries on; a scene with no stock footage is covered whole, up to a 10 s render (or this value, if higher) |
 | `COMFYUI_TIMEOUT` | `1800` | Seconds to wait per clip |
 
-Each lip-synced clip is checked after rendering: if her mouth barely moves during the narration, it is rendered again on a new seed, up to `AVATAR_LIPSYNC_ATTEMPTS` (default `3`) times. Because that is several renders per clip, a run can take longer when clips fail the check. The first check downloads a small face-tracking model to `assets/models/`; if the check can't run, the clip is kept and the log says so.
+Each lip-synced clip is checked after rendering, on its worst second: if her mouth stops moving, her eyes go wide or her eye colour strays from the reference image, it is rendered again on a new seed, up to `AVATAR_LIPSYNC_ATTEMPTS` (default `3`) times, and the scene falls back to stock footage if it never passes. The limits come from the rejected videos in `2_badOutput/notes.md`. A clip whose mouth moves but doesn't match the words still passes: no check catches that yet. Because that is several renders per clip, a run can take longer when clips fail the check. The first check downloads a small face-tracking model to `assets/models/`; if the check can't run, the clip is kept and the log says so.
 
 If a render fails, or a clip never passes the check, that scene uses its stock footage. With the silent workflow, a failed render falls back to `avatars.mp4` (if present) first; lip-synced scenes never do, since the static clip doesn't speak the line.
 
@@ -233,9 +242,10 @@ same key aren't counted. Stock figures come from the provider's response headers
 
 Uploads from the panel run `publish.py`, which you can also use directly:
 `python publish.py short_20261029_233100.mp4 --privacy unlisted` or
-`python publish.py --all`. Gemini writes the title, description and tags from
-the video's recorded topic and narration; a video made before the topic history
-existed needs `--topic` (the panel asks for it).
+`python publish.py --all`. They can run while a video renders, with their own log
+above the carousel; only one upload runs at a time. Gemini writes the title,
+description, hashtags and tags from the video's recorded topic and narration; a
+video made before the topic history existed needs `--topic` (the panel asks for it).
 
 Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
@@ -357,7 +367,7 @@ not just an API key, so there is a one-time browser step.
 ### 2. Mint a refresh token (once, on a machine with a browser)
 
 ```bash
-python authorize_youtube.py --client-id XXX --client-secret YYY
+python scripts/authorize_youtube.py --client-id XXX --client-secret YYY
 ```
 
 It opens the Google consent screen and prints three values. Put them in your
@@ -380,8 +390,12 @@ python main.py --runs 3 --upload             # batch, each one uploaded
 - **A project in "Testing" mode expires its refresh token after 7 days.** Move
   the OAuth consent screen from *Testing* to *In production* to get a
   long-lived token, otherwise the scheduled workflow starts failing weekly.
-- **Quota.** An upload costs 1600 units against a default daily quota of 10,000,
-  so roughly **6 uploads per day** before the API starts refusing.
+- **Quota.** An upload costs 1600 units and its thumbnail 50, against a default
+  daily quota of 10,000, so roughly **6 uploads per day** before the API starts
+  refusing.
+- **Thumbnails need a verified channel.** Each upload sets a still from the video
+  as its thumbnail. Without [phone verification](https://www.youtube.com/verify)
+  YouTube refuses it with a 403; the video stays up and the log says so.
 - Every successful upload moves the MP4 from `0_output/` to `1_uploaded/`, so
   `0_output/` only ever holds videos still waiting to go up.
 - A failed upload never discards the video — the MP4 stays in `0_output/`

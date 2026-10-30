@@ -4,9 +4,9 @@ Auto YT Shorts — Scheduled upload: 2 videos per day.
 Uploads 2 videos, and schedules the next ones for the following day via cron.
 
 Usage:
-    python upload_scheduled.py              # Upload the next 2 videos
-    python upload_scheduled.py --setup-cron  # Set up the automatic cron job
-    python upload_scheduled.py --status      # Show progress
+    python legacy/upload_scheduled.py              # Upload the next 2 videos
+    python legacy/upload_scheduled.py --setup-cron  # Set up the automatic cron job
+    python legacy/upload_scheduled.py --status      # Show progress
 """
 
 import os
@@ -18,11 +18,11 @@ import subprocess
 from datetime import datetime
 
 # Add the project directory to the path
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from modules.uploader import authenticate, upload_video
-from modules.metadata_generator import generate_metadata_batch, load_metadata
+from uploader import authenticate, upload_video
+from metadata_generator import generate_metadata_batch, load_metadata
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, move_to_uploaded
 
 # Pending videos live in 0_output; each one moves to 1_uploaded once it is up.
@@ -219,7 +219,7 @@ def show_status():
 
 def setup_cron():
     """Sets up cron to upload 2 videos per day at 10am."""
-    cron_cmd = f"0 10 * * * cd {PROJECT_DIR} && /usr/bin/python3 {PROJECT_DIR}/upload_scheduled.py >> {SCHEDULE_LOG} 2>&1"
+    cron_cmd = f"0 10 * * * cd {PROJECT_DIR} && /usr/bin/python3 {PROJECT_DIR}/legacy/upload_scheduled.py >> {SCHEDULE_LOG} 2>&1"
 
     # Check whether it already exists
     result = subprocess.run(['crontab', '-l'], capture_output=True, text=True)

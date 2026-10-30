@@ -5,7 +5,7 @@ Run this on a machine with a browser. It opens the Google consent screen once
 and prints a refresh token that never needs a browser again — put that token in
 your .env (local runs) or in repository secrets (GitHub Actions).
 
-    python authorize_youtube.py --client-id XXX --client-secret YYY
+    python scripts/authorize_youtube.py --client-id XXX --client-secret YYY
 
 Get the client id/secret from Google Cloud Console → APIs & Services →
 Credentials → Create OAuth client ID → Desktop app, with the YouTube Data API v3
@@ -16,6 +16,9 @@ import os
 import sys
 
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+# Runs from scripts/, so the project root has to be added for modules/.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules.publisher import SCOPES
 

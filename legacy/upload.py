@@ -4,9 +4,9 @@ Auto YT Shorts — Batch upload to YouTube.
 Uploads videos from the 0_output/ folder with AI-generated metadata.
 
 Usage:
-    python upload.py --generate-meta --privacy unlisted
-    python upload.py --meta-file 0_output/metadata_review.json
-    python upload.py --dry-run --generate-meta
+    python legacy/upload.py --generate-meta --privacy unlisted
+    python legacy/upload.py --meta-file 0_output/metadata_review.json
+    python legacy/upload.py --dry-run --generate-meta
 """
 
 import os
@@ -15,8 +15,11 @@ import json
 import time
 import argparse
 
-from modules.uploader import authenticate, upload_video
-from modules.metadata_generator import generate_metadata_batch, load_metadata
+# Runs from legacy/, so the project root has to be added for modules/.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from uploader import authenticate, upload_video
+from metadata_generator import generate_metadata_batch, load_metadata
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, move_to_uploaded
 
 
@@ -75,19 +78,19 @@ def parse_args(argv=None):
         epilog="""
 Examples:
   # Generate metadata with AI and upload
-  python upload.py --generate-meta
+  python legacy/upload.py --generate-meta
 
   # Preview what would be uploaded (without uploading)
-  python upload.py --dry-run --generate-meta
+  python legacy/upload.py --dry-run --generate-meta
 
   # Use metadata from a manually edited JSON file
-  python upload.py --meta-file 0_output/metadata_review.json
+  python legacy/upload.py --meta-file 0_output/metadata_review.json
 
   # Upload as unlisted with a shorter delay
-  python upload.py --generate-meta --privacy unlisted --delay 60
+  python legacy/upload.py --generate-meta --privacy unlisted --delay 60
 
   # Only generate metadata (no upload)
-  python upload.py --generate-meta --meta-only
+  python legacy/upload.py --generate-meta --meta-only
         """
     )
 
@@ -204,7 +207,7 @@ def main():
         if args.meta_only:
             print("✅ Metadata generated! File saved for review.")
             print(f"   📋 Edit the file, then run:")
-            print(f"   python upload.py --meta-file {os.path.join(video_dir, 'metadata_review.json')}")
+            print(f"   python legacy/upload.py --meta-file {os.path.join(video_dir, 'metadata_review.json')}")
             return 0
     else:
         # Default metadata

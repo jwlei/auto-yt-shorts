@@ -4,11 +4,11 @@ import os
 # models, 500/day for 3.5 Flash Lite), so a used-up model just hands over to the
 # next. Override with GEMINI_MODEL (one model or a comma-separated chain).
 DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-3.5-flash", "gemini-3-flash-preview",
-                  "gemini-2.5-flash", "gemini-3.5-flash-lite")
+                  "gemini-3.5-flash-lite")
 
 # Small yes/no decisions (is this topic a repeat?) don't need the big models or
 # their 20/day quota. Override with GEMINI_FAST_MODEL.
-DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash")
+DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-3.5-flash")
 
 # Tried in order. Both share the voice library, so a fallback keeps the same voice.
 # Override with GEMINI_TTS_MODEL (one model or a comma-separated chain).

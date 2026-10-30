@@ -38,9 +38,14 @@ VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 SEED_INPUTS = ("seed", "noise_seed")
 POLL_INTERVAL = 5
 
-# Spread of the lip gap (see lip_check.mouth_movement) below which a lip-synced
-# clip counts as not speaking. Measured clips: not speaking at most 0.016, speaking at least 0.034.
-MIN_MOUTH_MOVEMENT = 0.025
+# What a clip's worst second may score (see lip_check.measure_clip), set from the
+# clips in 2_badOutput/notes.md.
+# Lip gap spread: frozen mid-sentence 0.001, normal speech 0.009 and up.
+MIN_MOUTH_MOVEMENT = 0.008
+# 'Eye wide' score: the rejected stares 0.20-0.22, mostly 0.13 and below otherwise.
+MAX_STARE = 0.15
+# Lab distance from the expected iris colour: eyes that visibly changed 37-62, others 34 and below.
+MAX_EYE_SHIFT = 35
 DEFAULT_LIPSYNC_ATTEMPTS = 3
 
 
@@ -69,11 +74,12 @@ RENDER_CAP = 10
 # they all open on the same frame and move the same way. Each is used once
 # before any repeats. FRAMINGS is how far into the reference image the clip starts.
 FRAMINGS = (1.0, 1.25, 1.5)
+# All keep her facing the camera: lip-sync falls apart when her head turns away.
 CAMERA_MOVES = ("slow push-in towards her face", "slow pull-back", "gentle drift to the left",
-                "gentle drift to the right", "slight handheld sway", "slow arc around her")
-GESTURES = ("leans in towards the camera as if sharing a secret", "counts the point off on her fingers",
-            "gestures with both open hands", "tilts her head and raises an eyebrow",
-            "glances away for a moment, then back at the camera", "sits back and shrugs lightly")
+                "gentle drift to the right", "slight handheld sway")
+GESTURES = ("leans in slightly towards the camera", "counts the point off on her fingers",
+            "gestures with both open hands", "nods gently on the key words",
+            "sits back and shrugs lightly")
 # Where the top of her face sits in a reframed shot, as a share of its height.
 FACE_LINE = 0.35
 
@@ -314,6 +320,7 @@ class AvatarGenerator:
               f"{', persona ' + os.path.basename(self.reference_image) if self.reference_image else ''}...")
         clips = {}
         reference = None
+        self.expected_eye_color = None
 
         if not self.wait_until_reachable():
             print(f"   ❌ ComfyUI is not reachable at {self.url} — skipping avatar clips.")
@@ -335,8 +342,9 @@ class AvatarGenerator:
 
             try:
                 if self.reference_image:
-                    reference = self._upload(self._portrait_crop(self.reference_image, next(framings)),
-                                             "aishorts_avatar_ref.png")
+                    crop = self._portrait_crop(self.reference_image, next(framings))
+                    self._read_reference_eyes(crop)
+                    reference = self._upload(crop, "aishorts_avatar_ref.png")
             except Exception as e:
                 print(f"   ❌ Could not upload the reference image: {e}")
                 return clips
@@ -370,32 +378,54 @@ class AvatarGenerator:
 
     def _render_speaking(self, scene, prompt, reference, seconds, on_screen):
         """
-        Renders a lip-synced clip, on a new seed each time, until her mouth moves
-        during the part that gets shown. Returns None if it never does: an avatar
-        that sits silent over the voice is worse than the stock footage.
+        Renders a lip-synced clip, on a new seed each time, until the part that gets
+        shown passes the face checks. Returns None if it never does: an avatar that
+        sits silent over the voice, stares or changes eye colour is worse than the
+        stock footage.
         """
         audio = self._upload(self._narration(scene, seconds), "aishorts_avatar_voice.wav")
         for attempt in range(1, self.lipsync_attempts + 1):
             clip = self._render(prompt, reference, audio, seconds, f"avatar_scene_{scene['id']}")
             if not clip:
                 return None
-            movement = self._mouth_movement(clip, on_screen)
-            if movement is None or movement >= MIN_MOUTH_MOVEMENT:
+            problem = self._clip_problem(clip, on_screen)
+            if not problem:
                 return clip
-            print(f"      ⚠️ Her mouth barely moves ({movement:.3f}, attempt {attempt}/{self.lipsync_attempts}).")
-        print(f"   ❌ Scene {scene['id']} never lip-synced — using stock footage.")
+            print(f"      ⚠️ Rejected: {problem} (attempt {attempt}/{self.lipsync_attempts}).")
+        print(f"   ❌ Scene {scene['id']} never passed the face checks — using stock footage.")
         return None
 
-    def _mouth_movement(self, clip, seconds):
-        """Returns the clip's mouth movement, or None when it can't be measured, which accepts the clip."""
+    def _read_reference_eyes(self, image):
+        """Her eye colour for this video, from the reference. If unreadable, the first accepted clip sets it."""
+        if self.expected_eye_color is not None or not self.lipsync:
+            return
         try:
             # Imported here so runs without lip-sync never need mediapipe installed.
-            from modules.lip_check import mouth_movement
+            from modules.lip_check import eye_color
 
-            return mouth_movement(clip, seconds)
+            self.expected_eye_color = eye_color(image)
         except Exception as e:
-            print(f"      ⚠️ Could not check the lip-sync, keeping the clip unchecked: {e}")
+            print(f"      ⚠️ Could not read her eye colour from the reference: {e}")
+
+    def _clip_problem(self, clip, seconds):
+        """Returns what is wrong with the clip, or None if nothing is or it can't be measured, which accepts it."""
+        try:
+            # Imported here so runs without lip-sync never need mediapipe installed.
+            from modules.lip_check import measure_clip
+
+            measured = measure_clip(clip, seconds, self.expected_eye_color)
+        except Exception as e:
+            print(f"      ⚠️ Could not check the clip, keeping it unchecked: {e}")
             return None
+        if measured["mouth"] < MIN_MOUTH_MOVEMENT:
+            return f"her mouth stops moving, {measured['mouth']:.3f}"
+        if measured["stare"] > MAX_STARE:
+            return f"her eyes go wide, {measured['stare']:.2f}"
+        if measured["eye_shift"] > MAX_EYE_SHIFT:
+            return f"her eye colour changes, {measured['eye_shift']:.0f}"
+        if self.expected_eye_color is None:
+            self.expected_eye_color = measured["eye_color"]
+        return None
 
     # --- ComfyUI API ---
 

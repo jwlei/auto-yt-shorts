@@ -37,7 +37,7 @@ from flask import (Flask, abort, redirect, render_template, request,
 
 from modules.api_log import summarize_api_error
 from modules.avatar_generator import avatar_clip_range, on_screen_range
-from modules.paths import OUTPUT_DIR, UPLOADED_DIR
+from modules.paths import OUTPUT_DIR, UPLOADED_DIR, thumbnail_path
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
 from modules.topic_history import read_history
@@ -79,10 +79,16 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
 
+# What MediaPipe's native code prints to stderr while it loads, on every lip-sync
+# check. Warnings and notices only; its errors (E0000, F0000) still reach the log.
+NATIVE_NOISE = re.compile(r"^[WI]\d{4} \d\d:\d\d:\d\d|^WARNING: Logging before InitGoogle|^INFO: Created TensorFlow Lite")
+
+
 class Job:
     """
-    Tracks the one run allowed at a time. Rendering saturates the CPU and GPU,
-    so a second concurrent run would only make both slower.
+    Tracks one process at a time. Rendering saturates the CPU and GPU, so a second
+    concurrent run would only make both slower. Uploads hardly touch either, so
+    they get a Job of their own and can run during a render.
     """
 
     def __init__(self):
@@ -137,7 +143,7 @@ class Job:
         for line in process.stdout:
             line = line.rstrip()
             # ffmpeg's progress carriage-returns would flood the log.
-            if not line or line.startswith("frame=") or line.startswith("["):
+            if not line or line.startswith("frame=") or line.startswith("[") or NATIVE_NOISE.match(line):
                 continue
             self._add(line)
             self._track(line)
@@ -160,7 +166,7 @@ class Job:
         ("stage", re.compile(r"\u25b6 Stage (\d+)/(\d+): (.+)")),
         ("scenes", re.compile(r"narration for (\d+) scenes|Generation for (\d+) scenes")),
         ("clip", re.compile(r"Clip (\d+)/(\d+) \u00b7 scene (\d+): (\d+)s ([\w-]+)")),
-        ("rejected", re.compile(r"mouth barely moves \(.*attempt (\d+)/(\d+)\)")),
+        ("rejected", re.compile(r"Rejected: .*\(attempt (\d+)/(\d+)\)")),
         ("render", re.compile(r"Processing Scene (\d+)")),
     ]
 
@@ -210,8 +216,12 @@ class Job:
                 except ProcessLookupError:
                     pass
             self._add("🛑 Stopped by user.")
-        interrupt_comfyui()
         return True
+
+    @property
+    def uploading(self):
+        """In a run's own Upload step, when its video sits in 0_output with no topic recorded yet."""
+        return self.running and self.progress.get("stage", [None, None, None])[2] == "Upload"
 
     def snapshot(self):
         return {
@@ -229,6 +239,7 @@ class Job:
 
 
 job = Job()
+uploads = Job()
 
 
 def password_required(view):
@@ -713,15 +724,24 @@ def check():
 @app.route("/stop", methods=["POST"])
 @password_required
 def stop():
-    return {"ok": job.stop()}
+    stopped = job.stop()
+    if stopped:
+        interrupt_comfyui()
+    return {"ok": stopped}
+
+
+@app.route("/publish/stop", methods=["POST"])
+@password_required
+def stop_upload():
+    return {"ok": uploads.stop()}
 
 
 @app.route("/shutdown", methods=["POST"])
 @password_required
 def shutdown():
     """Stops the server itself: started from start_webapp.pyw it has no window to close."""
-    if job.running:
-        return {"ok": False, "error": "A run is in progress. Stop it first."}, 409
+    if job.running or uploads.running:
+        return {"ok": False, "error": "A run or upload is in progress. Stop it first."}, 409
     # Reply first, then exit, so the browser gets its answer.
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"ok": True}
@@ -739,7 +759,7 @@ def launcher_refresh():
         code_changed_at = float(request.form.get("code_changed_at", 0))
     except ValueError:
         abort(400)
-    if code_changed_at <= STARTED_AT or job.running:
+    if code_changed_at <= STARTED_AT or job.running or uploads.running:
         return {"restarting": False}
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"restarting": True}
@@ -749,6 +769,7 @@ def launcher_refresh():
 @password_required
 def status():
     payload = job.snapshot()
+    payload["upload"] = uploads.snapshot()
     payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
     online = comfyui_online()
     payload["comfyui"] = {"online": online, "can_start": bool(comfyui_launcher()),
@@ -784,7 +805,9 @@ def publish():
     if privacy not in ("private", "unlisted", "public"):
         return {"ok": False, "error": "Unknown privacy setting."}, 400
     if not youtube_configured():
-        return {"ok": False, "error": "Set the YouTube keys in .env first (run authorize_youtube.py once)."}, 400
+        return {"ok": False, "error": "Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."}, 400
+    if job.uploading:
+        return {"ok": False, "error": "The run is uploading its own video. Try again when that step is done."}, 409
 
     argv = [sys.executable, "publish.py", "--privacy", privacy]
     name = request.form.get("video")
@@ -796,15 +819,18 @@ def publish():
     else:
         argv.append("--all")
 
-    if not job.start(argv):
-        return {"ok": False, "error": "A run is already in progress."}, 409
+    if not uploads.start(argv):
+        return {"ok": False, "error": "An upload is already in progress."}, 409
     return {"ok": True}
 
 
 @app.route("/delete/<folder>/<path:name>", methods=["POST"])
 @password_required
 def delete(folder, name):
-    os.remove(safe_video_path(folder, name))
+    path = safe_video_path(folder, name)
+    os.remove(path)
+    if os.path.exists(thumbnail_path(path)):
+        os.remove(thumbnail_path(path))
     return {"ok": True}
 
 

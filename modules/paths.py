@@ -9,6 +9,11 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "0_output")
 UPLOADED_DIR = os.path.join(PROJECT_ROOT, "1_uploaded")
 
 
+def thumbnail_path(video_path):
+    """Where a video's thumbnail lives: beside it, with the same name."""
+    return os.path.splitext(video_path)[0] + ".jpg"
+
+
 def move_to_uploaded(video_path):
     """Moves an uploaded video into UPLOADED_DIR. Returns the new path (or the old one if the move failed)."""
     os.makedirs(UPLOADED_DIR, exist_ok=True)

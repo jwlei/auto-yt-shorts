@@ -1,8 +1,13 @@
 import os
 import random
+import re
 import ffmpeg
 
+from modules.audio import SILENCE_NOISE
 from modules.paths import OUTPUT_DIR
+
+# How long neighbouring scenes overlap in a transition, in seconds.
+TRANSITION = 0.5
 
 class Composer:
     def __init__(self):
@@ -20,6 +25,21 @@ class Composer:
             return float(probe['format']['duration'])
         except:
             return 0.0
+
+    def _tail_silence(self, audio_path, duration):
+        """How many seconds of silence the file ends on."""
+        stderr = (
+            ffmpeg.input(audio_path)
+            .filter('silencedetect', noise=SILENCE_NOISE, d=0.05)
+            .output('-', format='null')
+            .run(capture_stderr=True, quiet=True)[1]
+            .decode('utf8', errors='replace')
+        )
+        starts = re.findall(r"silence_start: ([\d.]+)", stderr)
+        ends = re.findall(r"silence_end: ([\d.]+)", stderr)
+        if not starts or (len(ends) == len(starts) and float(ends[-1]) < duration - 0.05):
+            return 0.0
+        return max(0.0, duration - float(starts[-1]))
 
     def _stock_stream(self, path, duration):
         # force_original_aspect_ratio='increase' fills the 9:16 frame and
@@ -45,19 +65,23 @@ class Composer:
         """
         scene_id = scene['id']
         audio_path = scene['audio_path']
-        total_duration = scene['duration']
+        narration = scene['duration']
         output_path = os.path.join(self.temp_dir, f"scene_{scene_id}.mp4")
 
         try:
-            input_audio = ffmpeg.input(audio_path)
+            # The next scene's transition overlaps this scene's last TRANSITION
+            # seconds. A pause in the narration can be shorter than that, so top it
+            # up with silence: the overlap must never reach the last word.
+            total_duration = narration + max(0.0, TRANSITION - self._tail_silence(audio_path, narration))
+            input_audio = ffmpeg.input(audio_path).filter('apad', whole_dur=total_duration)
 
             if is_avatar:
                 # --- AVATAR MODE (Single Loop + CROP) ---
                 is_static = video_pair[0] == self.avatar_path
                 print(f"   ⚙️ Processing Scene {scene_id}: 🤖 Avatar Mode ({'Cropped' if is_static else 'Generated'})")
 
-                on_screen = scene.get('avatar_seconds') or total_duration
-                cutaway = video_pair[1] if on_screen < total_duration else None
+                on_screen = scene.get('avatar_seconds') or narration
+                cutaway = video_pair[1] if on_screen < narration else None
 
                 video_stream = (
                     ffmpeg.input(video_pair[0], stream_loop=-1)
@@ -200,7 +224,7 @@ class Composer:
             next_clip = ffmpeg.input(video_paths[i])
             next_dur = self.get_duration(video_paths[i])
             
-            trans_dur = 0.5
+            trans_dur = TRANSITION
             offset = current_dur - trans_dur
             
             effect = random.choice(self.transitions)
@@ -214,19 +238,26 @@ class Composer:
                 offset=offset
             )
             
+            # No fade-in: the next scene's first word plays at full volume over
+            # the silence process_scene left at the end of this one.
             a_stream = ffmpeg.filter(
-                [a_stream, next_clip.audio], 
-                'acrossfade', 
-                d=trans_dur
+                [a_stream, next_clip.audio],
+                'acrossfade',
+                d=trans_dur,
+                c2='nofade'
             )
             
             current_dur = (current_dur + next_dur) - trans_dur
 
+        # Written under another name until complete: the panel lists every .mp4 in
+        # this folder and can upload one while a run is still stitching.
+        part_path = output_path + ".part"
         try:
             runner = ffmpeg.output(
-                v_stream, 
-                a_stream, 
-                output_path, 
+                v_stream,
+                a_stream,
+                part_path,
+                format='mp4',
                 vcodec='libx264',   # Standard H.264 video
                 acodec='aac',       # Standard AAC audio
                 pix_fmt='yuv420p',  # 🔥 FIX 1: Windows compatibility
@@ -235,11 +266,14 @@ class Composer:
             )
             
             runner.run(overwrite_output=True, quiet=False)
-            
+            os.replace(part_path, output_path)
+
             print(f"✅ FINAL VIDEO SAVED: {output_path}")
             return output_path
 
         except ffmpeg.Error as e:
             error_log = e.stderr.decode('utf8') if e.stderr else str(e)
             print(f"❌ Stitching Error: {error_log}")
+            if os.path.exists(part_path):
+                os.remove(part_path)
             return None

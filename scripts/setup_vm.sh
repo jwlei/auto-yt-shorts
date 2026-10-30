@@ -14,7 +14,7 @@ sudo apt install -y python3 python3-pip python3-venv ffmpeg cron git
 
 # 2. Create and activate the virtual environment
 echo "🐍 2. Setting up the Python virtual environment..."
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 python3 -m venv venv
 source venv/bin/activate
 
@@ -30,7 +30,7 @@ ffmpeg -version | head -n 1
 # 5. Set up the cron job (24/7, running at 10:00 AM)
 echo "⏰ 5. Setting up the 24/7 scheduler (cron) to run every day at 10:00 AM..."
 SCRIPT_DIR="$(pwd)"
-CRON_CMD="0 10 * * * cd $SCRIPT_DIR && $SCRIPT_DIR/venv/bin/python daily_pipeline.py >> $SCRIPT_DIR/daily.log 2>&1"
+CRON_CMD="0 10 * * * cd $SCRIPT_DIR && $SCRIPT_DIR/venv/bin/python legacy/daily_pipeline.py >> $SCRIPT_DIR/daily.log 2>&1"
 
 # Add to the crontab without duplicating
 (crontab -l 2>/dev/null | grep -v "daily_pipeline.py" ; echo "$CRON_CMD") | crontab -

@@ -23,6 +23,11 @@ SEARCH_CACHE_TTL = 24 * 60 * 60
 # 'large' is usually 4K (slow to download and render) and is often missing.
 PIXABAY_RENDITION_ORDER = ("medium", "large", "small", "tiny")
 
+# Without a pick from the LLM, a clip is drawn from this many of the best search matches.
+UNPICKED_POOL = 3
+# Search terms lead with the subject, so a retry keeps this many of the first words.
+RETRY_QUERY_WORDS = 2
+
 
 def get_provider():
     """Returns the configured provider name, or raises if VIDEO_PROVIDER is unknown."""
@@ -141,42 +146,68 @@ class AssetManager:
                 json.dump(candidates, f)
         return candidates
 
-    def search_video(self, query, duration_min=4):
+    def find_candidates(self, query, duration_min=4):
         """
-        Searches the configured provider for a portrait video matching the query.
-        Returns the chosen candidate ({"url", "tags", ...}) or None.
+        Searches the configured provider for portrait videos matching the query.
+        Returns the usable candidates ({"url", "tags", ...}), best search match first.
         """
         print(f"   🔍 Searching {self.label} for: '{query}'...")
 
         try:
             candidates = self._search_api(query)
             if candidates is None:
-                return None
+                return []
 
             if not candidates:
-                # Retry strategy: Simplify query if complex query fails
+                # Retry strategy: Simplify query if complex query fails. Search terms
+                # lead with the subject ("river flowing forest drone"), so the last
+                # word is the one to lose, and the one least worth searching for alone.
                 if " " in query:
-                    simple_query = query.split()[-1] # Try last word (usually the noun)
+                    simple_query = query.rsplit(" ", 1)[0]
                     print(f"      ⚠️ No results. Retrying with '{simple_query}'...")
-                    return self.search_video(simple_query)
-                return None
+                    return self.find_candidates(simple_query, duration_min)
+                return []
 
             # Filter logic: Prefer portrait (9:16) clips; the composer crops landscape ones
             portrait = [c for c in candidates if c["height"] > c["width"]]
             pool = portrait or candidates
 
             # Prefer videos that aren't too short (at least 4 seconds)
-            valid_videos = [c for c in pool if c["duration"] >= duration_min]
-
-            if not valid_videos:
-                valid_videos = pool # Fallback to whatever exists
-
-            # Randomize selection
-            return random.choice(valid_videos)
+            return [c for c in pool if c["duration"] >= duration_min] or pool
 
         except Exception as e:
             print(f"      ❌ Error searching {self.label}: {e}")
+            return []
+
+    def _pick_with_retry(self, searches, pick_clips):
+        """
+        Has pick_clips choose for every search. Where no clip fit, searches again for
+        just the subject, once: a long query often only matches on its minor words.
+        Returns {search index: clip index, or None if nothing fits}.
+        """
+        picks = pick_clips(searches)
+        retries = {}
+        for i, search in enumerate(searches):
+            subject = " ".join(search["query"].split()[:RETRY_QUERY_WORDS])
+            if i in picks and picks[i] is None and subject != search["query"]:
+                print(f"      ⚠️ Nothing fits '{search['query']}'. Retrying with '{subject}'...")
+                search.update(query=subject, clips=self.find_candidates(subject))
+                retries[i] = search
+        if retries:
+            order = list(retries)
+            for position, pick in pick_clips([retries[i] for i in order]).items():
+                picks[order[position]] = pick
+        return picks
+
+    def _choose(self, search, picks, index):
+        """
+        The picked clip, or None if nothing fits. Without a pick, one of the best
+        search matches, so videos don't all reuse the top hit.
+        """
+        clips = search["clips"]
+        if not clips or (index in picks and picks[index] is None):
             return None
+        return clips[picks[index]] if index in picks else random.choice(clips[:UNPICKED_POOL])
 
     def download_video(self, url, filename):
         """
@@ -204,9 +235,11 @@ class AssetManager:
             print(f"      ❌ Error downloading {filename}: {e}")
             return None
 
-    def get_videos(self, script_data):
+    def get_videos(self, script_data, pick_clips=None):
         """
         NEW LOGIC: Downloads TWO videos per scene (A and B).
+        pick_clips (ContentBrain.pick_stock_clips) chooses among what each search
+        found, given the line being spoken.
         Returns a list of tuples: [(path_a, path_b), (path_a, path_b), ...]
         Also records what was searched and found on each scene as
         scene['footage'] = [{"query", "found"}, ...] ("found" is None when nothing was).
@@ -214,22 +247,37 @@ class AssetManager:
         print(f"🎥 Starting Double-Feature Video Download ({self.label})...")
         video_pairs = []
 
+        # 1. Get Search Terms, and search them all so one request can pick every clip
+        searches = []
         for scene in script_data:
-            scene_id = scene['id']
-
-            # 1. Get Search Terms
             # Fallback to 'keywords' if visual_1/2 don't exist (compatibility mode)
             query_a = scene.get('visual_1', scene.get('keywords', 'abstract'))
             query_b = scene.get('visual_2', query_a) # Use A if B is missing
+            for query in (query_a, query_b):
+                searches.append({"line": scene.get('text', ''), "query": query,
+                                 "clips": self.find_candidates(query)})
+        picks = self._pick_with_retry(searches, pick_clips) if pick_clips else {}
 
-            # 2. Search & Download Clip A
-            clip_a = self.search_video(query_a)
+        for number, scene in enumerate(script_data):
+            scene_id = scene['id']
+            search_a, search_b = searches[number * 2], searches[number * 2 + 1]
+            query_a, query_b = search_a["query"], search_b["query"]
+
+            clip_a = self._choose(search_a, picks, number * 2)
+            clip_b = self._choose(search_b, picks, number * 2 + 1)
+            # A scene without footage gets dropped, narration and all, unless the
+            # avatar covers it. Rather show a poor match; rate_footage_fit marks it
+            # as one, which sends the avatar here first.
+            if not clip_a and not clip_b:
+                clip_a = self._choose(search_a, {}, number * 2)
+                clip_b = self._choose(search_b, {}, number * 2 + 1)
+
+            # 2. Download Clip A
             path_a = None
             if clip_a:
                 path_a = self.download_video(clip_a["url"], f"scene_{scene_id}_a.mp4")
 
-            # 3. Search & Download Clip B
-            clip_b = self.search_video(query_b)
+            # 3. Download Clip B
             path_b = None
             if clip_b:
                 path_b = self.download_video(clip_b["url"], f"scene_{scene_id}_b.mp4")

@@ -24,7 +24,28 @@ MAX_RETRY_WAIT = 90
 # prompt, whatever the model wrote.
 SPEAKING_LEAD = ("The presenter is talking to the camera the whole time: her lips and jaw move clearly "
                  "with every word, her mouth opening and closing as she speaks. ")
-SPEAKING_TAIL = " She keeps talking throughout, mouth moving on every syllable."
+SPEAKING_TAIL = (" She keeps talking throughout, mouth moving on every syllable. Her eyes stay relaxed, "
+                 "their colour unchanged from the first frame, and she blinks naturally.")
+
+# How many of a search's results the model chooses from; they come best match first.
+MAX_CLIPS_TO_PICK_FROM = 10
+
+# Most hashtags in a description, not counting #Shorts.
+MAX_HASHTAGS = 8
+# Reach-bait rather than a description of the video. #Shorts is always added separately.
+GENERIC_HASHTAGS = {"shorts", "short", "ytshorts", "youtubeshorts", "viral", "fyp", "foryou", "foryoupage",
+                    "trending", "subscribe"}
+
+
+def _hashtag_line(candidates):
+    """The model's hashtags without duplicates or generic ones, then #Shorts. Hashtags can't contain spaces."""
+    unique = {}
+    for candidate in candidates:
+        tag = re.sub(r"\W", "", str(candidate))
+        if tag and not tag.isdigit() and tag.lower() not in GENERIC_HASHTAGS:
+            unique.setdefault(tag.lower(), tag)
+    return " ".join(f"#{tag}" for tag in [*list(unique.values())[:MAX_HASHTAGS], "Shorts"])
+
 
 def _get_client():
     api_key = os.getenv("GEMINI_API_KEY")
@@ -88,8 +109,9 @@ def _generate(prompt, retries=4, models=None):
     """
     Calls Gemini, waiting out the overload and per-minute rate limits that a
     scheduled run hits regularly. A model whose daily quota is used up, that
-    doesn't answer within GEMINI_TIMEOUT, or that keeps failing hands over to the
-    next model in the chain. Raises once every model has failed.
+    doesn't answer within GEMINI_TIMEOUT, that Google has retired, or that keeps
+    failing hands over to the next model in the chain. Raises once every model has
+    failed.
     """
     client = _get_client()
     timeout = int(os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT)
@@ -112,6 +134,10 @@ def _generate(prompt, retries=4, models=None):
                     break
                 if is_daily_quota(e):
                     print(f"   ⚠️ {model} has used its daily quota. Trying the next model...")
+                    _skipped_models.add(model)
+                    break
+                if getattr(e, "code", None) == 404:
+                    print(f"   ⚠️ {model} no longer exists. Trying the next model...")
                     _skipped_models.add(model)
                     break
                 if attempt == retries - 1 or not _is_retryable(e):
@@ -297,11 +323,15 @@ class ContentBrain:
 
     Rules:
     - "title": under 80 characters, curiosity-driven, no clickbait punctuation spam.
-    - "description": 2-3 sentences summarizing the video, then a blank line, then "#Shorts".
+    - "description": 2-3 sentences summarizing the video, with no hashtags in it.
+    - "hashtags": 5-{MAX_HASHTAGS} hashtags naming what THIS video is about: its people, places, events and
+      subject area, the most specific first (e.g. "#EiffelTower", "#VictorLustig", "#ConArtist", "#TrueCrime").
+      A viewer searching one of them should expect this video. No spaces inside a hashtag. No generic reach
+      hashtags such as #viral, #fyp, #foryou or #trending. Do not include #Shorts: it is added automatically.
     - "tags": 8-12 lowercase search keywords, no "#" prefix.
 
     Return ONLY strict JSON:
-    {{"title": "...", "description": "...", "tags": ["...", "..."]}}
+    {{"title": "...", "description": "...", "hashtags": ["#...", "#..."], "tags": ["...", "..."]}}
     """
 
         fallback = {
@@ -326,9 +356,14 @@ class ContentBrain:
         if not isinstance(tags, list):
             tags = []
 
-        description = str(metadata.get('description', '')).strip() or fallback['description']
-        if "#Shorts" not in description:
-            description = f"{description}\n\n#Shorts"
+        # The tags make usable hashtags if the model left them out.
+        hashtags = metadata.get('hashtags')
+        if not isinstance(hashtags, list) or not hashtags:
+            hashtags = tags
+
+        # Any hashtags it wrote into the text anyway would repeat the line below.
+        summary = re.sub(r"\s*#\w+", "", str(metadata.get('description', ''))).strip() or topic
+        description = f"{summary}\n\n{_hashtag_line(hashtags)}"
 
         return {
             "title": str(metadata['title']).strip(),
@@ -349,14 +384,14 @@ class ContentBrain:
         mood = scene.get('mood', 'engaging')
         if speaking:
             fallback = (f"The presenter looks into the camera and says in a clear British accent: \"{scene['text']}\" "
-                        f"Her expression is {mood}, and she {gesture}. "
+                        f"Her expression is calm and engaged, with a touch of {mood}, and she {gesture}. "
                         f"Camera: {camera}. Quiet room tone.")
             delivery = (f"- The presenter speaks this exact line to camera in a clear British accent: \"{scene['text']}\"\n"
                         "    - Quote the line word for word, then describe her expression, gestures and head movement while she says it.\n"
-                        "    - Her mouth moves the whole time. Show the mood with her eyebrows, eyes and head; never a still, frozen, "
-                        "vacant, unblinking or held expression, and never closed lips.")
+                        "    - Her mouth moves the whole time. Show the mood with her eyebrows, a slight smile and small head movements; "
+                        "never a still, frozen, vacant, unblinking or held expression, and never closed lips.")
         else:
-            fallback = (f"0-{seconds} seconds: The presenter looks into the camera with a {mood} expression "
+            fallback = (f"0-{seconds} seconds: The presenter looks into the camera with a calm expression, a touch of {mood}, "
                         f"and {gesture}, mouth closed, listening. "
                         f"Camera: {camera}. Soft ambient room sound, no speech.")
             delivery = ("- The presenter does NOT speak: mouth closed, reacting to the line with expression and gestures.\n"
@@ -370,6 +405,8 @@ class ContentBrain:
     {delivery}
     - Use this camera move, keeping her face in frame: {camera}. No other camera moves.
     - While she does this, she {gesture}.
+    - Her eyes stay relaxed and natural even when the line is surprising: do not write wide eyes, staring, shock,
+      astonishment, winking or anything about her eye colour. She keeps facing the camera.
     - No music.
     - Do NOT describe the presenter's appearance, clothes or room.
     - Under 100 words. Return ONLY the prompt text.
@@ -382,6 +419,53 @@ class ContentBrain:
             text = ""
         text = text or fallback
         return f"{SPEAKING_LEAD}{text}{SPEAKING_TAIL}" if speaking else text
+
+    def pick_stock_clips(self, searches):
+        """
+        Asks a fast model which clip each stock search should use, from the clips'
+        tags and the line being spoken: search results alone include plenty that
+        have nothing to do with the line. searches: [{"line", "query", "clips"}, ...].
+        Returns {search index: clip index, or None if no clip fits}. If the model
+        misbehaves the result is incomplete or empty, and the caller chooses for the rest.
+        """
+        lines = []
+        for n, search in enumerate(searches, 1):
+            options = "; ".join(f'{c}) {clip.get("tags") or "untitled"}'
+                                for c, clip in enumerate(search["clips"][:MAX_CLIPS_TO_PICK_FROM], 1))
+            if options:
+                lines.append(f'{n}. Line: "{search["line"]}" | Wanted: "{search["query"]}" | Clips: {options}')
+        if not lines:
+            return {}
+
+        prompt = f"""
+    You are the editor of a YouTube Short. Each numbered item below is a moment in the video: the narration
+    line, what we wanted to show, and the stock clips we found, described by their tags.
+
+    For each item pick the clip a viewer would accept as showing that line. The subject must match: what the
+    line is about beats mood or setting. Judge the meaning, not shared words: a tiger is not a tiger shark.
+    If no clip shows the subject, answer 0 for that item rather than the nearest thing: an unrelated animal,
+    person or object is worse than nothing, even if it is beautiful.
+    Where two items share a line, pick different clips.
+
+    Items:
+    {chr(10).join(lines)}
+
+    Return ONLY strict JSON: [{{"id": 1, "clip": 2}}, {{"id": 2, "clip": 0}}, ...]
+    """
+        picks = {}
+        try:
+            reply = _generate(prompt, retries=2, models=get_fast_models()).text
+            for chosen in json.loads(reply.replace('```json', '').replace('```', '').strip()):
+                index, clip = int(chosen["id"]) - 1, int(chosen["clip"]) - 1
+                if not 0 <= index < len(searches):
+                    continue
+                if clip == -1:
+                    picks[index] = None
+                elif 0 <= clip < min(len(searches[index]["clips"]), MAX_CLIPS_TO_PICK_FROM):
+                    picks[index] = clip
+        except Exception as e:
+            print(f"   ⚠️ Stock clip picking failed ({e}). Using the top search results.")
+        return picks
 
     def rate_footage_fit(self, script_data):
         """

@@ -5,6 +5,7 @@ __pycache__/
 .env
 0_output/*
 1_uploaded/*
+2_badOutput/*
 logs/
 assets/temp/*
 assets/audio_clips/*

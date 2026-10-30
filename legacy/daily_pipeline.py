@@ -6,9 +6,9 @@ AutoShorts AI — Fully Automated Daily Pipeline.
 3. Upload automatically to YouTube Shorts
 
 Usage:
-    python daily_pipeline.py --count 2          # Generate and publish 2 videos now
-    python daily_pipeline.py --generate-only    # Only generate, don't upload
-    python daily_pipeline.py --upload-only      # Only upload pending videos
+    python legacy/daily_pipeline.py --count 2          # Generate and publish 2 videos now
+    python legacy/daily_pipeline.py --generate-only    # Only generate, don't upload
+    python legacy/daily_pipeline.py --upload-only      # Only upload pending videos
 """
 
 import os
@@ -18,7 +18,7 @@ import asyncio
 import subprocess
 from datetime import datetime
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
 from main import main_async, parse_args as parse_main_args

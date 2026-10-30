@@ -19,6 +19,9 @@
     color: #cbd0dd;
   }
   .log .empty-log { color: var(--muted); }
+  #uploadBox .status { margin-bottom: 8px; }
+  #uploadBox .log { max-height: 130px; margin-bottom: 12px; }
+  #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
   /* One row per line: a muted timestamp gutter, then the text colour-coded by kind. */
   .ln { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px; padding: 1px 0; }
   .ln .t { color: #5d6376; font: .74rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
@@ -289,7 +292,7 @@
       <label class="check">
         <input type="checkbox" name="upload" id="upload">
         <span>Upload to YouTube when done
-          <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run authorize_youtube.py once).</div>
+          <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run scripts/authorize_youtube.py once).</div>
         </span>
       </label>
       <label for="privacy">Privacy</label>
@@ -378,7 +381,15 @@
       <button type="button" id="tabOutput" class="active">Ready (<span id="countOutput">0</span>)</button>
       <button type="button" id="tabUploaded">Uploaded (<span id="countUploaded">0</span>)</button>
     </div>
-    <button type="button" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run authorize_youtube.py once)."{% endif %}>Upload all</button>
+    <button type="button" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."{% endif %}>Upload all</button>
+  </div>
+  <div id="uploadBox" hidden>
+    <div class="status">
+      <span class="dot" id="uploadDot"></span>
+      <span id="uploadStatus"></span>
+      <button type="button" class="danger" id="stopUpload" hidden>Stop</button>
+    </div>
+    <div class="log" id="uploadLog"></div>
   </div>
   <div class="carousel" id="videos"></div>
   <div class="cnav" id="cnav" hidden>
@@ -474,8 +485,8 @@ for (const id of ['clipsRange', 'secondsRange']) {
 // --- Videos ---
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 const CAN_UPLOAD = {{ can_upload | tojson }};
-const NO_KEYS = 'Set the YouTube keys in .env first (run authorize_youtube.py once).';
-let busy = false;  // A run (or upload) is in progress; only one at a time.
+const NO_KEYS = 'Set the YouTube keys in .env first (run scripts/authorize_youtube.py once).';
+let busy = false;  // An upload is in progress, or a run is uploading its own video; one at a time.
 
 function slides() { return [...$('videos').querySelectorAll('.vid')]; }
 function currentSlide() {
@@ -542,7 +553,6 @@ async function startUpload(fields) {
   const body = new FormData();
   body.append('privacy', $('privacy').value);
   for (const [k, v] of Object.entries(fields)) body.append(k, v);
-  autoScroll = true;
   const res = await fetch('/publish', { method: 'POST', body });
   const data = await res.json();
   if (!data.ok) alert(data.error || 'Could not start the upload.');
@@ -692,20 +702,32 @@ function lineKind(text) {
   if (/^Deleted:|^🧹/.test(s)) return 'dim';
   return '';
 }
-let logFirst = null, logLast = 0;
-function renderLog(lines) {
-  const el = $('log');
+function logWriter(el, follow) {
+  let first = null, last = 0;
   const row = l => `<div class="ln ${lineKind(l.text)}"><span class="t">${l.t}</span><span class="x">${esc(l.text)}</span></div>`;
-  // A new run, or old lines trimmed off the top: redraw. Otherwise append what is new.
-  if (lines[0].n !== logFirst) {
-    el.innerHTML = lines.map(row).join('');
-    logFirst = lines[0].n;
-  } else {
-    const fresh = lines.filter(l => l.n > logLast);
-    if (fresh.length) el.insertAdjacentHTML('beforeend', fresh.map(row).join(''));
-  }
-  logLast = lines[lines.length - 1].n;
-  if (autoScroll) el.scrollTop = el.scrollHeight;
+  return lines => {
+    // A new run, or old lines trimmed off the top: redraw. Otherwise append what is new.
+    if (lines[0].n !== first) {
+      el.innerHTML = lines.map(row).join('');
+      first = lines[0].n;
+    } else {
+      const fresh = lines.filter(l => l.n > last);
+      if (fresh.length) el.insertAdjacentHTML('beforeend', fresh.map(row).join(''));
+    }
+    last = lines[lines.length - 1].n;
+    if (follow()) el.scrollTop = el.scrollHeight;
+  };
+}
+const renderLog = logWriter($('log'), () => autoScroll);
+const renderUploadLog = logWriter($('uploadLog'), () => true);
+
+function renderUpload(up) {
+  $('uploadBox').hidden = !up.lines.length;
+  $('uploadDot').className = 'dot' + (up.running ? ' on' : (up.returncode ? ' fail' : ' ok'));
+  $('stopUpload').hidden = !up.running;
+  $('uploadStatus').textContent = up.running ? `Uploading · ${fmt(up.elapsed)} so far`
+    : up.returncode === 0 ? 'Upload finished ✔' : `Upload failed (exit ${up.returncode})`;
+  if (up.lines.length) renderUploadLog(up.lines);
 }
 
 // --- Status polling ---
@@ -718,7 +740,8 @@ async function poll() {
   }
 
   const running = data.running;
-  busy = running;
+  busy = data.upload.running || (running && (data.progress.stage || [])[2] === 'Upload');
+  renderUpload(data.upload);
   $('dot').className = 'dot' + (running ? ' on' : (data.returncode ? ' fail' : ''));
   $('go').disabled = running;
   $('check').disabled = running;
@@ -784,6 +807,12 @@ $('check').addEventListener('click', () => startJob('/check'));
 $('stop').addEventListener('click', async () => {
   if (!confirm('Stop the current run? This kills it and its ffmpeg renders, and cancels the ComfyUI clip it is rendering.')) return;
   await fetch('/stop', { method: 'POST' });
+  poll();
+});
+
+$('stopUpload').addEventListener('click', async () => {
+  if (!confirm('Stop the upload? A video that has not finished sending stays in Ready.')) return;
+  await fetch('/publish/stop', { method: 'POST' });
   poll();
 });
 

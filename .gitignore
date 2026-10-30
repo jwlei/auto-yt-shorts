@@ -17,8 +17,11 @@ Thumbs.db
 /assets/final
 /0_output/*
 /1_uploaded/*
+/2_badOutput/*
 !/0_output/.gitkeep
 !/1_uploaded/.gitkeep
+!/2_badOutput/.gitkeep
+!/2_badOutput/notes.md
 /logs
 /assets/temp
 /assets/video_clips

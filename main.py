@@ -74,7 +74,7 @@ def preflight(args=None):
                             "Run: pip install -r requirements.txt")
         for key in ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"):
             if not os.getenv(key):
-                problems.append(f"{key} is not set — run authorize_youtube.py once to mint it.")
+                problems.append(f"{key} is not set — run scripts/authorize_youtube.py once to mint it.")
 
     if not shutil.which("ffmpeg"):
         problems.append("ffmpeg not found on PATH — install it (see README Prerequisites).")
@@ -224,7 +224,7 @@ async def generate_one(args):
     # 3. ASSETS: Get Stock Video
     stage("Stock footage", upload)
     asset_manager = AssetManager()
-    assets_map = asset_manager.get_videos(script)
+    assets_map = asset_manager.get_videos(script, brain.pick_stock_clips)
 
     # 4. COMPOSER: Merge Video + Audio
     composer = Composer()

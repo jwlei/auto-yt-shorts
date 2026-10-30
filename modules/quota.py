@@ -15,13 +15,15 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 
 # Free-tier requests per day, until a real 429 reports the model's actual limit.
 FREE_TIER_LIMITS = {
-    "gemini-3.8-flash": 20, "gemini-3.5-flash": 20, "gemini-3-flash-preview": 20, "gemini-2.5-flash": 20,
+    "gemini-3.8-flash": 20, "gemini-3.5-flash": 20, "gemini-3-flash-preview": 20,
     "gemini-3.5-flash-lite": 500,
     "gemini-3.8-flash-tts": 10, "gemini-3.8-flash-lite-tts": 10,
 }
 
 YOUTUBE_UPLOADS = "uploads"
 YOUTUBE_UPLOAD_COST = 1600
+YOUTUBE_THUMBNAILS = "thumbnails"
+YOUTUBE_THUMBNAIL_COST = 50
 YOUTUBE_DAILY_UNITS = 10000
 
 # The window each stock provider's limit headers describe.
@@ -114,7 +116,9 @@ def quota_summary():
             {"title": "Gemini text", "rows": [gemini_row(m) for m in text_models]},
             {"title": "Gemini voice", "rows": [gemini_row(m) for m in get_tts_models()]},
             {"title": "Stock footage", "rows": [_stock_row(reported, time.time())]},
-            {"title": "YouTube", "rows": [_row("Upload units", calls[YOUTUBE_UPLOADS] * YOUTUBE_UPLOAD_COST,
+            {"title": "YouTube", "rows": [_row("Upload units",
+                                               calls[YOUTUBE_UPLOADS] * YOUTUBE_UPLOAD_COST
+                                               + calls[YOUTUBE_THUMBNAILS] * YOUTUBE_THUMBNAIL_COST,
                                                YOUTUBE_DAILY_UNITS, YOUTUBE_UPLOADS in refused)]},
         ],
     }
