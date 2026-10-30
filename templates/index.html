@@ -92,6 +92,7 @@
   .step { flex: 1; text-align: center; font-size: .66rem; color: var(--muted); padding-top: 7px; border-top: 3px solid var(--line); line-height: 1.25; }
   .step.done { border-color: var(--ok); color: var(--text); }
   .step.now { border-color: var(--accent); color: var(--text); font-weight: 700; }
+  .step .eta { display: block; margin-top: 2px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
   .now-line { font-size: .92rem; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
   .now-line .time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
   .comfy-now { margin-top: 12px; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
@@ -506,6 +507,22 @@ function fmt(sec) {
   const m = Math.floor(sec / 60), s = sec % 60;
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s).padStart(2, '0')}`;
 }
+// An estimate, so rounded: exact seconds would promise more than it knows.
+function fmtEta(sec) {
+  if (sec < 60) return `~${Math.max(5, Math.round(sec / 5) * 5)}s`;
+  const m = Math.round(sec / 60);
+  return m >= 60 ? `~${Math.floor(m / 60)}h ${m % 60}m` : `~${m} min`;
+}
+function stepEta(step) {
+  if (!step) return '';
+  if (step.state === 'done') return fmt(step.seconds);
+  if (step.state === 'next') return fmtEta(step.seconds);
+  return step.seconds > 0 ? `${fmtEta(step.seconds)} left` : 'any moment';
+}
+function totalEta(eta) {
+  const done = new Date(Date.now() + eta.total_left * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  return `${fmtEta(eta.total_left)} left, done around ${done}`;
+}
 function renderNow(data) {
   const p = data.progress || {};
   const c = data.comfyui || {};
@@ -514,10 +531,11 @@ function renderNow(data) {
   if (show) {
     const [n, total, name] = p.stage;
     const names = STAGES.slice(0, total);
+    const steps = p.eta ? p.eta.steps : [];
     $('stepper').innerHTML = names.map((s, i) =>
-      `<div class="step ${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}">${esc(s)}</div>`).join('');
+      `<div class="step ${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}">${esc(s)}<span class="eta">${stepEta(steps[i])}</span></div>`).join('');
     $('stageName').textContent = `Step ${n} of ${total}: ${name}`;
-    $('stageTime').textContent = fmt(p.stage_elapsed);
+    $('stageTime').textContent = fmt(p.stage_elapsed) + (steps[n - 1] ? ` · ${stepEta(steps[n - 1])}` : '');
     $('stageDetail').textContent = p.detail || STAGE_HINTS[name] || '';
   }
 
@@ -588,7 +606,8 @@ async function poll() {
   if (running) {
     const p = data.progress || {};
     const run = p.run ? ` · video ${p.run[0]} of ${p.run[1]}` : '';
-    $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} total (started ${data.started_at})`;
+    const eta = p.eta ? ` · ${totalEta(p.eta)}` : '';
+    $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} so far (started ${data.started_at})${eta}`;
   } else if (data.returncode === 0) {
     $('statusText').textContent = 'Finished ✔';
   } else if (data.returncode !== null) {

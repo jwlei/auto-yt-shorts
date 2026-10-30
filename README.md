@@ -214,6 +214,11 @@ ready video has **Upload** and **Delete**; **Upload all** sends every ready vide
 wide the options, the run card (Generate, ComfyUI, progress, log) and the
 portrait videos sit in three columns on one screen.
 
+During a run the panel shows an ETA for each step and for the whole run, including
+any videos still to come. Finished steps are timed and saved to
+`logs/stage_timings.json`, so the estimates start rough and get better with each run.
+Delete that file to start over.
+
 Uploads from the panel run `publish.py`, which you can also use directly:
 `python publish.py short_20261029_233100.mp4 --privacy unlisted` or
 `python publish.py --all`. Gemini writes the title, description and tags from

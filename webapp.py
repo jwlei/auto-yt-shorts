@@ -37,12 +37,14 @@ from flask import (Flask, abort, redirect, render_template, request,
 
 from modules.api_log import summarize_api_error
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR
+from modules.run_eta import RunEta
 from modules.topic_history import read_history
 
 load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOLDERS = {"output": OUTPUT_DIR, "uploaded": UPLOADED_DIR}
+STAGE_TIMINGS = os.path.join(PROJECT_ROOT, "logs", "stage_timings.json")
 # Keeps the pipeline and nvidia-smi from flashing a console window when the
 # server itself runs windowless (start_webapp.pyw).
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -87,6 +89,7 @@ class Job:
         self.returncode = None
         self.command = None
         self.progress = {}
+        self.eta = None
 
     @property
     def running(self):
@@ -102,6 +105,7 @@ class Job:
             self.returncode = None
             self.command = " ".join(argv[1:])
             self.progress = {}
+            self.eta = RunEta(argv, env, STAGE_TIMINGS)
             self.process = subprocess.Popen(
                 argv,
                 cwd=PROJECT_ROOT,
@@ -134,6 +138,8 @@ class Job:
             if len(self.lines) > 2000:
                 del self.lines[:500]
         process.wait()
+        if process.returncode == 0:
+            self.eta.finish()
         self.returncode = process.returncode
         self.finished_at = datetime.now()
 
@@ -147,6 +153,7 @@ class Job:
         ("stage", re.compile(r"\u25b6 Stage (\d+)/(\d+): (.+)")),
         ("scenes", re.compile(r"narration for (\d+) scenes|Generation for (\d+) scenes")),
         ("clip", re.compile(r"Clip (\d+)/(\d+) \u00b7 scene (\d+): (\d+)s ([\w-]+)")),
+        ("rejected", re.compile(r"mouth barely moves \(.*attempt (\d+)/(\d+)\)")),
         ("render", re.compile(r"Processing Scene (\d+)")),
     ]
 
@@ -158,17 +165,24 @@ class Job:
                 continue
             if kind == "run":
                 p["run"] = [int(m.group(1)), int(m.group(2))]
+                self.eta.video(int(m.group(1)), int(m.group(2)))
             elif kind == "stage":
                 p["stage"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
                 p["stage_started"] = time.time()
                 p.pop("detail", None)
+                self.eta.stage(*p["stage"])
             elif kind == "scenes":
                 p["scenes"] = int(m.group(1) or m.group(2))
+                self.eta.scenes(p["scenes"])
             elif kind == "clip":
                 p["detail"] = f"Clip {m.group(1)} of {m.group(2)} - scene {m.group(3)}, {m.group(4)}s {m.group(5)}"
+                self.eta.clip(int(m.group(1)), int(m.group(2)))
+            elif kind == "rejected":
+                self.eta.clip_rejected(int(m.group(1)), int(m.group(2)))
             elif kind == "render":
                 total = p.get("scenes")
                 p["detail"] = f"Scene {m.group(1)}" + (f" of {total}" if total else "")
+                self.eta.scene()
             return
 
     def stop(self):
@@ -202,7 +216,8 @@ class Job:
             "elapsed": int(((self.finished_at or datetime.now()) - self.started_at).total_seconds()) if self.started_at else 0,
             "progress": {**self.progress,
                          "stage_elapsed": int(time.time() - self.progress["stage_started"])
-                         if "stage_started" in self.progress else 0},
+                         if "stage_started" in self.progress else 0,
+                         "eta": self.eta.estimate() if self.eta and self.running else None},
         }
 
 
