@@ -19,6 +19,8 @@
     color: #cbd0dd;
   }
   .log .empty-log { color: var(--muted); }
+  .estimate { margin-top: 12px; font-size: .9rem; }
+  .estimate .err { margin: 0; }
   #uploadBox .status { margin-bottom: 8px; }
   #uploadBox .log { max-height: 130px; margin-bottom: 12px; }
   #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
@@ -223,7 +225,7 @@
           </select>
         </div>
       </div>
-      <div class="hint">Each video takes ~15–45 min with avatars. The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
+      <div class="hint">The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
     </div>
 
     <div class="section" id="formVoice">
@@ -341,6 +343,10 @@
     <button type="button" class="danger" id="stop" hidden>Stop</button>
   </div>
   <div class="err" id="formError" hidden></div>
+  <div class="estimate" id="estimate" hidden>
+    <div id="estimateTotal"></div>
+    <div class="hint" id="estimateDetail"></div>
+  </div>
 
   <div class="run-sep"></div>
   <div class="sys" title="ComfyUI renders the avatar clips on your GPU. Generate starts it (without its web page) when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env; otherwise start it yourself. Failed avatar renders fall back to stock footage.">
@@ -631,10 +637,49 @@ function stepEta(step) {
   if (step.state === 'next') return fmtEta(step.seconds);
   return step.seconds > 0 ? `${fmtEta(step.seconds)} left` : 'any moment';
 }
-function totalEta(eta) {
-  const done = new Date(Date.now() + eta.total_left * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  return `${fmtEta(eta.total_left)} left, done around ${done}`;
+function clockIn(sec) {
+  return new Date(Date.now() + sec * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 }
+function totalEta(eta) {
+  return `${fmtEta(eta.total_left)} left, done around ${clockIn(eta.total_left)}`;
+}
+
+// --- Estimate before a run, from the form's current options ---
+let plan = null, planRequest = 0, planTimer = 0;
+function renderPlan() {
+  if (!plan) return;
+  if (!plan.ok) {
+    $('estimateTotal').innerHTML = `<span class="err">${esc(plan.error)}</span>`;
+    $('estimateDetail').textContent = '';
+    return;
+  }
+  $('estimateTotal').innerHTML = `Estimated time: <b>${fmtEta(plan.total)}</b> · done around ${clockIn(plan.total)}`;
+  const parts = [];
+  if (plan.videos > 1) parts.push(`${plan.videos} videos, ${fmtEta(plan.video)} each`);
+  parts.push(plan.clips
+    ? `${plan.clips} avatar ${plan.clips === 1 ? 'clip' : 'clips'} of about ${plan.clip_seconds} s per video, ${fmtEta(plan.clip_render)} each. A clip that fails its check renders again, which adds that time`
+    : 'No avatar clips to render');
+  $('estimateDetail').textContent = parts.join(' · ') + '.';
+  $('estimateDetail').title = plan.steps.map(s => `${s.name}: ${fmtEta(s.seconds)}`).join('\n');
+}
+async function refreshPlan() {
+  const request = ++planRequest;
+  let data;
+  try {
+    data = await (await fetch('/api/estimate', { method: 'POST', body: new FormData($('form')) })).json();
+  } catch (e) {
+    return; // transient; the next change retries
+  }
+  if (request !== planRequest) return;  // A newer answer is on its way
+  plan = data;
+  renderPlan();
+}
+function queuePlan() {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(refreshPlan, 150);
+}
+$('form').addEventListener('input', queuePlan);
+$('form').addEventListener('change', queuePlan);
 function renderNow(data) {
   const p = data.progress || {};
   const c = data.comfyui || {};
@@ -731,6 +776,7 @@ function renderUpload(up) {
 }
 
 // --- Status polling ---
+let wasRunning = false;
 async function poll() {
   let data;
   try {
@@ -740,6 +786,10 @@ async function poll() {
   }
 
   const running = data.running;
+  if (wasRunning && !running) refreshPlan();  // That run just improved the timings
+  wasRunning = running;
+  $('estimate').hidden = running;
+  renderPlan();  // The clock has moved on
   busy = data.upload.running || (running && (data.progress.stage || [])[2] === 'Upload');
   renderUpload(data.upload);
   $('dot').className = 'dot' + (running ? ' on' : (data.returncode ? ' fail' : ''));
@@ -826,6 +876,7 @@ $('shutdown').addEventListener('click', async e => {
 
 loadForm();
 syncForm();
+refreshPlan();
 poll();
 setInterval(poll, 2000);
 </script>

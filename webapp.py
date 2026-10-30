@@ -189,7 +189,7 @@ class Job:
                 self.eta.scenes(p["scenes"])
             elif kind == "clip":
                 p["detail"] = f"Clip {m.group(1)} of {m.group(2)} - scene {m.group(3)}, {m.group(4)}s {m.group(5)}"
-                self.eta.clip(int(m.group(1)), int(m.group(2)))
+                self.eta.clip(int(m.group(1)), int(m.group(2)), int(m.group(4)))
             elif kind == "rejected":
                 self.eta.clip_rejected(int(m.group(1)), int(m.group(2)))
             elif kind == "render":
@@ -684,6 +684,16 @@ def build_run(form):
         argv += ["--output", output]
 
     return argv, env, None
+
+
+@app.route("/api/estimate", methods=["POST"])
+@password_required
+def estimate():
+    """What a run with the form's current options should take. Starts nothing."""
+    argv, env, error = build_run(request.form)
+    if error:
+        return {"ok": False, "error": error}
+    return {"ok": True, **RunEta(argv, env, STAGE_TIMINGS).plan()}
 
 
 @app.route("/generate", methods=["POST"])

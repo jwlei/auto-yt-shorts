@@ -1,6 +1,9 @@
 import json
+import math
 import os
 import time
+
+from modules.avatar_generator import DEFAULT_CLIP_RANGE, DEFAULT_ON_SCREEN_RANGE
 
 # Same order as main.py's STAGES, which can't be imported here: it pulls in the whole pipeline.
 STAGES = ("Topic & script", "Voice", "Stock footage", "Avatar clips", "Rendering scenes", "Stitching", "Upload")
@@ -11,12 +14,17 @@ STAGES = ("Topic & script", "Voice", "Stock footage", "Avatar clips", "Rendering
 DEFAULT_TIMINGS = {
     "Topic & script": 90, "Voice": 60, "Stock footage": 60, "Avatar clips": 30, "Stitching": 45, "Upload": 30,
     "clip": 300,  # One ComfyUI render, including the prompt written for it
+    "clip_seconds": 6,  # The length of clip that render time is for: it scales with length
     "scene": 3,  # One scene through ffmpeg
     "scenes": 9,  # Scenes per video
     "auto_clips": 5,  # Clips per video in the 'auto' avatar layout
 }
 # How much each new measurement moves the stored value.
 LEARNING_RATE = 0.3
+# A scene's narration caps how long she stays on screen in it.
+TYPICAL_SCENE_SECONDS = 5.5
+# A clip renders this much longer than she is on screen: rounded up, plus the overlap into the next scene.
+CLIP_EXTRA_SECONDS = 1
 
 
 def _load_timings(path):
@@ -35,6 +43,12 @@ def _option(argv, name, default):
     return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
+def _slider(env, low_name, high_name, defaults):
+    """A range the panel's sliders set, from the run's own env, else .env, else the default."""
+    settings = {**os.environ, **(env or {})}
+    return int(settings.get(low_name) or defaults[0]), int(settings.get(high_name) or defaults[1])
+
+
 class RunEta:
     """
     Estimates what is left of a run from how long each step took before. Steps are
@@ -46,6 +60,10 @@ class RunEta:
         self.path = path
         self.timings = _load_timings(path)
         self.videos_left = int(_option(argv, "--runs", 1)) - 1
+        self.upload = "--upload" in argv
+        self.clip_range = _slider(env, "AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", DEFAULT_CLIP_RANGE)
+        shortest, longest = _slider(env, "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS", DEFAULT_ON_SCREEN_RANGE)
+        self.planned_clip_seconds = min((shortest + longest) / 2, TYPICAL_SCENE_SECONDS) + CLIP_EXTRA_SECONDS
         layout = _option(argv, "--avatar-clips", "auto")
         if layout == "0" or (env or {}).get("AVATAR_SOURCE") == "static":
             self.planned_clips = 0  # No renders: the static clip just gets looped
@@ -66,6 +84,7 @@ class RunEta:
         self.clip_number = 0
         self.first_clip_at = None
         self.attempt_started = None
+        self.attempt_seconds = self.planned_clip_seconds
 
     # --- What the run reports ---
 
@@ -84,12 +103,13 @@ class RunEta:
         self.number, self.total, self.name = number, total, name
         self.stage_started = time.time()
 
-    def clip(self, number, total):
+    def clip(self, number, total, seconds):
         now = time.time()
         self._finish_attempt(now)
         self.clip_number, self.clip_count = number, total
         self.first_clip_at = self.first_clip_at or now
         self.attempt_started = now
+        self.attempt_seconds = seconds
 
     def clip_rejected(self, attempt, attempts):
         """The lip-sync check failed: another render starts now, unless that was the last try."""
@@ -113,6 +133,7 @@ class RunEta:
     def _finish_attempt(self, now):
         if self.attempt_started is not None:
             self._learn("clip", now - self.attempt_started)
+            self._learn("clip_seconds", self.attempt_seconds)
             self.attempt_started = None
 
     def _finish_stage(self):
@@ -138,27 +159,45 @@ class RunEta:
 
     # --- Estimating ---
 
+    def _render_seconds(self, clip_seconds):
+        return self.timings["clip"] * clip_seconds / self.timings["clip_seconds"]
+
     def _stage_seconds(self, name, clips, scenes):
         if name == "Avatar clips":
-            return self.timings[name] + clips * self.timings["clip"]
+            return self.timings[name] + clips * self._render_seconds(self.planned_clip_seconds)
         if name == "Rendering scenes":
             return scenes * self.timings["scene"]
         return self.timings[name]
 
     def _planned_clip_count(self):
-        return self.timings["auto_clips"] if self.planned_clips is None else self.planned_clips
+        if self.planned_clips is not None:
+            return self.planned_clips
+        # What 'auto' usually picks, within the range this run allows and the scenes there are.
+        return min(max(self.timings["auto_clips"], self.clip_range[0]), self.clip_range[1], self.timings["scenes"])
 
     def _current_left(self, now):
         elapsed = now - self.stage_started
         if self.name == "Avatar clips" and self.clip_count is not None:
-            clips_after = self.clip_count - self.clip_number
+            after = (self.clip_count - self.clip_number) * self._render_seconds(self.planned_clip_seconds)
             if self.attempt_started is None:
-                return clips_after * self.timings["clip"]
-            this_clip = self.timings["clip"] - (now - self.attempt_started)
-            return max(this_clip, 0) + clips_after * self.timings["clip"]
+                return after
+            this_clip = self._render_seconds(self.attempt_seconds) - (now - self.attempt_started)
+            return max(this_clip, 0) + after
         clips = self._planned_clip_count() if self.clip_count is None else self.clip_count
         scenes = self.timings["scenes"] if self.scene_count is None else self.scene_count
         return max(self._stage_seconds(self.name, clips, scenes) - elapsed, 0)
+
+    def plan(self):
+        """What a run with these options should take, for the panel to show before it starts."""
+        clips = self._planned_clip_count()
+        names = STAGES if self.upload else STAGES[:-1]
+        steps = [{"name": name, "seconds": round(self._stage_seconds(name, clips, self.timings["scenes"]))}
+                 for name in names]
+        video = sum(step["seconds"] for step in steps)
+        return {"steps": steps, "video": video, "videos": self.videos_left + 1,
+                "total": video * (self.videos_left + 1), "clips": round(clips),
+                "clip_seconds": math.ceil(self.planned_clip_seconds),
+                "clip_render": round(self._render_seconds(self.planned_clip_seconds))}
 
     def estimate(self):
         """Returns seconds per step and left overall, or None before the first step (or for a run without steps)."""
