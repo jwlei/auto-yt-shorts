@@ -183,31 +183,54 @@ class AssetManager:
         """
         Has pick_clips choose for every search. Where no clip fit, searches again for
         just the subject, once: a long query often only matches on its minor words.
+        A clip already picked for an earlier search counts as not fitting: related
+        searches return many of the same clips, and a video shows each only once.
         Returns {search index: clip index, or None if nothing fits}.
         """
         picks = pick_clips(searches)
+        taken = set()
+        for i, search in enumerate(searches):
+            if picks.get(i) is not None:
+                url = search["clips"][picks[i]]["url"]
+                if url in taken:
+                    picks[i] = None
+                taken.add(url)
+
         retries = {}
         for i, search in enumerate(searches):
             subject = " ".join(search["query"].split()[:RETRY_QUERY_WORDS])
             if i in picks and picks[i] is None and subject != search["query"]:
                 print(f"      ⚠️ Nothing fits '{search['query']}'. Retrying with '{subject}'...")
-                search.update(query=subject, clips=self.find_candidates(subject))
-                retries[i] = search
+                fresh = [c for c in self.find_candidates(subject) if c["url"] not in taken]
+                if fresh:
+                    search.update(query=subject, clips=fresh)
+                    retries[i] = search
         if retries:
             order = list(retries)
             for position, pick in pick_clips([retries[i] for i in order]).items():
                 picks[order[position]] = pick
         return picks
 
-    def _choose(self, search, picks, index):
+    def _choose(self, search, picks, index, used):
         """
-        The picked clip, or None if nothing fits. Without a pick, one of the best
-        search matches, so videos don't all reuse the top hit.
+        The picked clip, or None if nothing fits or this video already used it.
+        Without a pick, one of the best unused search matches, so videos don't all
+        reuse the top hit. Adds the clip to used.
         """
         clips = search["clips"]
         if not clips or (index in picks and picks[index] is None):
             return None
-        return clips[picks[index]] if index in picks else random.choice(clips[:UNPICKED_POOL])
+        fresh = [c for c in clips if c["url"] not in used]
+        if index in picks:
+            clip = clips[picks[index]]
+            if clip not in fresh:
+                return None
+        elif fresh:
+            clip = random.choice(fresh[:UNPICKED_POOL])
+        else:
+            return None
+        used.add(clip["url"])
+        return clip
 
     def download_video(self, url, filename):
         """
@@ -257,20 +280,24 @@ class AssetManager:
                 searches.append({"line": scene.get('text', ''), "query": query,
                                  "clips": self.find_candidates(query)})
         picks = self._pick_with_retry(searches, pick_clips) if pick_clips else {}
+        used = set()
 
         for number, scene in enumerate(script_data):
             scene_id = scene['id']
             search_a, search_b = searches[number * 2], searches[number * 2 + 1]
             query_a, query_b = search_a["query"], search_b["query"]
 
-            clip_a = self._choose(search_a, picks, number * 2)
-            clip_b = self._choose(search_b, picks, number * 2 + 1)
+            clip_a = self._choose(search_a, picks, number * 2, used)
+            clip_b = self._choose(search_b, picks, number * 2 + 1, used)
             # A scene without footage gets dropped, narration and all, unless the
             # avatar covers it. Rather show a poor match; rate_footage_fit marks it
             # as one, which sends the avatar here first.
             if not clip_a and not clip_b:
-                clip_a = self._choose(search_a, {}, number * 2)
-                clip_b = self._choose(search_b, {}, number * 2 + 1)
+                clip_a = self._choose(search_a, {}, number * 2, used)
+                clip_b = self._choose(search_b, {}, number * 2 + 1, used)
+            # Or, if all they found is on screen already, a clip shown twice.
+            if not clip_a and not clip_b:
+                clip_a = self._choose(search_a, {}, number * 2, set()) or self._choose(search_b, {}, number * 2 + 1, set())
 
             # 2. Download Clip A
             path_a = None
@@ -288,7 +315,8 @@ class AssetManager:
             ]
 
             # 4. Fallback Logic (Self-Healing)
-            # If B fails, use A twice. If A fails, use B twice.
+            # If one clip fails, the other carries the scene: the composer plays a
+            # pair of the same clip as one shot.
             if not path_a and path_b:
                 path_a = path_b
                 print(f"      ⚠️ Scene {scene_id} Clip A missing. Using Clip B for both.")

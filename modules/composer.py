@@ -41,12 +41,16 @@ class Composer:
             return 0.0
         return max(0.0, duration - float(starts[-1]))
 
-    def _stock_stream(self, path, duration):
+    def _stock_stream(self, path, duration, slowdown=1.0):
         # force_original_aspect_ratio='increase' fills the 9:16 frame and
         # lets the crop trim the overflow; a bare scale would squash any
         # stock clip returned in a different aspect ratio.
+        # tpad holds the last frame if the video stream ends a little before the
+        # container says, so the scene never runs short and cuts off the voice.
         return (
-            ffmpeg.input(path, stream_loop=-1)
+            ffmpeg.input(path)
+            .setpts(f'{slowdown}*PTS')
+            .filter('tpad', stop=-1, stop_mode='clone')
             .trim(duration=duration)
             .setpts('PTS-STARTPTS')
             .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
@@ -55,13 +59,33 @@ class Composer:
             .filter('fps', fps=30, round='up')
         )
 
+    def _stock_shots(self, paths, duration):
+        """
+        Fills duration with the clips, each played once: a shot that starts over is
+        plain to see. They share the time evenly, except that a clip ending early
+        leaves the rest of its share to the others. Clips too short between them are
+        slowed down to fit, and a pair of the same clip is one shot.
+        """
+        paths = list(dict.fromkeys(paths))
+        lengths = [self.get_duration(path) or duration for path in paths]
+        slowdown = max(1.0, duration / sum(lengths))
+
+        shares = [0.0] * len(paths)
+        left = duration
+        for done, i in enumerate(sorted(range(len(paths)), key=lengths.__getitem__)):
+            shares[i] = min(lengths[i] * slowdown, left / (len(paths) - done))
+            left -= shares[i]
+
+        streams = [self._stock_stream(path, share, slowdown) for path, share in zip(paths, shares)]
+        return ffmpeg.concat(*streams, v=1, a=0) if len(streams) > 1 else streams[0]
+
     def process_scene(self, scene, video_pair, is_avatar=False):
         """
         Combines Audio with Visuals.
-        - If Avatar: video_pair is (avatar clip, stock clip or None). Loops the clip
+        - If Avatar: video_pair is (avatar clip, stock pair or None). Loops the clip
           (+ CROP LOGO on the static avatar), for scene['avatar_seconds'] if that is
-          set, then cuts to the stock clip while the voice carries on.
-        - If Stock: Split duration 50/50 between Video A and Video B.
+          set, then cuts to the stock footage while the voice carries on.
+        - If Stock: Split duration between Video A and Video B (see _stock_shots).
         """
         scene_id = scene['id']
         audio_path = scene['audio_path']
@@ -109,17 +133,16 @@ class Composer:
                 )
                 if cutaway:
                     print(f"      ✂️ On screen {on_screen:.1f}s of {total_duration:.1f}s, then stock footage")
-                    video_stream = ffmpeg.concat(
-                        video_stream, self._stock_stream(cutaway, total_duration - on_screen + 0.5), v=1, a=0)
+                    seconds = total_duration - on_screen + 0.5
+                    # visual_2 matches the end of the line, which is what a cutaway
+                    # shows. Clip A only comes in if that clip would run out.
+                    path_a, path_b = cutaway
+                    clips = [path_b] if self.get_duration(path_b) >= seconds else [path_a, path_b]
+                    video_stream = ffmpeg.concat(video_stream, self._stock_shots(clips, seconds), v=1, a=0)
             else:
-                # --- DUAL VIDEO MODE (50/50 Split) ---
+                # --- DUAL VIDEO MODE (A/B Split) ---
                 print(f"   ⚙️ Processing Scene {scene_id}: 🎞️ A/B Split Mode")
-                path_a, path_b = video_pair
-
-                stream_a = self._stock_stream(path_a, total_duration / 2)
-                stream_b = self._stock_stream(path_b, (total_duration / 2) + 0.5)
-
-                video_stream = ffmpeg.concat(stream_a, stream_b, v=1, a=0)
+                video_stream = self._stock_shots(video_pair, total_duration + 0.5)
 
             # Combine Video + Audio
             runner = ffmpeg.output(
@@ -185,8 +208,7 @@ class Composer:
 
             # Injection Logic: Check if current index is in our chosen list
             if i in avatar_clips:
-                # visual_2 matches the end of the line, which is what a cutaway shows.
-                current_pair = (avatar_clips[i], current_pair[1] if current_pair else None)
+                current_pair = (avatar_clips[i], current_pair)
                 is_avatar = True
             elif current_pair is None:
                 continue 

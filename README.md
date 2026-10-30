@@ -421,13 +421,13 @@ python main.py --runs 3 --upload             # batch, each one uploaded
 ### `asset_manager.py` (The Librarian)
 
 - **Input:** Visual keywords.
-- **Logic:** Searches the provider set by `VIDEO_PROVIDER` (`pixabay` or `pexels`) for **Portrait (9:16)** videos. Pexels filters by orientation server-side; Pixabay has no orientation filter, so portrait clips are picked from the results and landscape ones are a center-cropped fallback. Downloads pairs of videos for every scene. Handles fallbacks (if Video B is missing, reuse Video A). Search responses are cached for 24h in `assets/search_cache/<provider>/`, as Pixabay's API terms require.
+- **Logic:** Searches the provider set by `VIDEO_PROVIDER` (`pixabay` or `pexels`) for **Portrait (9:16)** videos. Pexels filters by orientation server-side; Pixabay has no orientation filter, so portrait clips are picked from the results and landscape ones are a center-cropped fallback. Downloads pairs of videos for every scene, and uses each clip only once per video. Handles fallbacks (if Video B is missing, Video A carries the scene). Search responses are cached for 24h in `assets/search_cache/<provider>/`, as Pixabay's API terms require.
 
 ### `composer.py` (The Editor)
 
 - **Input:** Audio files + Video files.
 - **Logic:**
-- **Scene Processing:** Cuts the scene duration in half. Plays Video A for the first half, Video B for the second half.
+- **Scene Processing:** Cuts the scene duration in half. Plays Video A for the first half, Video B for the second half. Stock clips never loop: a clip that ends early leaves its time to the other, one clip plays straight through, and clips too short between them are slowed down to fit.
 - **Avatar Injection:** Puts the Avatar on the scenes chosen by the avatar plan (see *Generated Avatar Clips*), replacing the stock footage with your Avatar loop, or with lip-synced clips from `avatar_generator.py` when `AVATAR_SOURCE=comfyui`.
 - **Stitching:** Merges all scenes using `xfade` transitions (wipes, slides).
 - **Rendering:** Exports as `yuv420p` H.264 MP4 with `faststart` flags for maximum compatibility.

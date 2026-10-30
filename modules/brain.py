@@ -445,7 +445,8 @@ class ContentBrain:
     line is about beats mood or setting. Judge the meaning, not shared words: a tiger is not a tiger shark.
     If no clip shows the subject, answer 0 for that item rather than the nearest thing: an unrelated animal,
     person or object is worse than nothing, even if it is beautiful.
-    Where two items share a line, pick different clips.
+    The video shows each clip once, and several items can list the same clip: never pick clips with the same
+    tags for two items. If an item's only fitting clip is taken, answer 0 for it.
 
     Items:
     {chr(10).join(lines)}
