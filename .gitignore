@@ -42,3 +42,4 @@ metadata_review.json
 # Persona images used as the avatar reference (one is picked per video)
 /assets/avatar/avatar*.jpg
 
+.vscode/settings.json
