@@ -36,6 +36,7 @@ from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
 from modules.api_log import summarize_api_error
+from modules.avatar_generator import avatar_clip_range, on_screen_range
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
@@ -68,6 +69,11 @@ AVATAR_STYLES = {
     "lipsync": os.path.join(PROJECT_ROOT, "comfyui", "avatar_lipsync.json"),
     "reaction": os.path.join(PROJECT_ROOT, "comfyui", "avatar_workflow.json"),
 }
+# The panel's sliders: form field prefix, the variables they set, and their limits.
+AVATAR_SLIDERS = (
+    ("avatar_clips", "AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", 1, 9),
+    ("avatar_seconds", "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS", 2, 10),
+)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
@@ -578,6 +584,10 @@ def index():
         defaults={
             "avatar_source": (os.getenv("AVATAR_SOURCE") or "static").lower(),
             "avatar_clips": (os.getenv("AVATAR_CLIPS") or "auto").lower(),
+            "avatar_clips_min": avatar_clip_range()[0],
+            "avatar_clips_max": avatar_clip_range()[1],
+            "avatar_seconds_min": on_screen_range()[0],
+            "avatar_seconds_max": on_screen_range()[1],
         },
         static_avatar=os.path.exists(os.path.join(PROJECT_ROOT, "assets", "avatar", "avatars.mp4")),
         can_upload=youtube_configured(),
@@ -629,6 +639,17 @@ def build_run(form):
     if style not in AVATAR_STYLES:
         return None, None, "Unknown avatar style."
     env["COMFYUI_WORKFLOW"] = AVATAR_STYLES[style]
+
+    for field, low_name, high_name, lowest, highest in AVATAR_SLIDERS:
+        try:
+            low, high = int(form[f"{field}_min"]), int(form[f"{field}_max"])
+        except KeyError:
+            continue  # A page opened before the sliders existed: keep the .env values
+        except ValueError:
+            return None, None, "Avatar sliders must be whole numbers."
+        if not lowest <= low <= high <= highest:
+            return None, None, f"Avatar slider out of range: {low}-{high}, allowed {lowest}-{highest}."
+        env[low_name], env[high_name] = str(low), str(high)
 
     if form.get("upload"):
         privacy = form.get("privacy") or "private"

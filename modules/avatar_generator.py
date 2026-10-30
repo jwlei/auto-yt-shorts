@@ -1,5 +1,6 @@
 import copy
 import glob
+import itertools
 import json
 import math
 import os
@@ -44,18 +45,73 @@ DEFAULT_LIPSYNC_ATTEMPTS = 3
 
 
 # Which scenes show the avatar:
-#   auto - opens on it, then 3-8 avatar scenes in total, picked after the stock
-#          footage is in: scenes whose footage fits the narration badly go to the avatar
+#   auto - opens on it, then AVATAR_CLIPS_MIN-AVATAR_CLIPS_MAX avatar scenes in total, picked after
+#          the stock footage is in: scenes whose footage fits the narration badly go to the avatar
 #   3    - opens on it + two random middle scenes
 #   2    - two random middle scenes only
 #   0    - none
 AVATAR_LAYOUTS = ("auto", "3", "2", "0")
 DEFAULT_AVATAR_LAYOUT = "auto"
-AUTO_MIN, AUTO_MAX = 3, 8
-# The random starting count tops out here; only poor footage pushes it towards AUTO_MAX.
-AUTO_BASE_MAX = 5
+DEFAULT_CLIP_RANGE = (3, 5)
 # Footage rated at or below this (0-10) counts as a poor fit and pulls in the avatar.
 POOR_FIT = 4
+
+# Seconds she stays on screen each time (AVATAR_MIN_SECONDS, AVATAR_MAX_SECONDS).
+# A longer line then cuts to the scene's stock footage while her voice carries on.
+DEFAULT_ON_SCREEN_RANGE = (3, 6)
+# Less stock footage than this reads as a glitch rather than a cut.
+MIN_CUTAWAY = 1.0
+# Longest clip rendered, unless AVATAR_MAX_SECONDS asks for more. A scene with no
+# stock footage to cut to has to be covered whole, so this can exceed the on-screen range.
+RENDER_CAP = 10
+
+# Every clip of a video starts from the same reference image, so without these
+# they all open on the same frame and move the same way. Each is used once
+# before any repeats. FRAMINGS is how far into the reference image the clip starts.
+FRAMINGS = (1.0, 1.25, 1.5)
+CAMERA_MOVES = ("slow push-in towards her face", "slow pull-back", "gentle drift to the left",
+                "gentle drift to the right", "slight handheld sway", "slow arc around her")
+GESTURES = ("leans in towards the camera as if sharing a secret", "counts the point off on her fingers",
+            "gestures with both open hands", "tilts her head and raises an eyebrow",
+            "glances away for a moment, then back at the camera", "sits back and shrugs lightly")
+# Where the top of her face sits in a reframed shot, as a share of its height.
+FACE_LINE = 0.35
+
+
+def _range_from_env(low_name, high_name, defaults):
+    low = int(os.getenv(low_name) or defaults[0])
+    high = int(os.getenv(high_name) or defaults[1])
+    return min(low, high), high
+
+
+def avatar_clip_range():
+    """Fewest and most avatar scenes in an 'auto' video."""
+    return _range_from_env("AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", DEFAULT_CLIP_RANGE)
+
+
+def on_screen_range():
+    """Shortest and longest time she stays on screen each time, in seconds."""
+    return _range_from_env("AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS", DEFAULT_ON_SCREEN_RANGE)
+
+
+def has_footage(scene):
+    return any(clip.get('found') for clip in scene.get('footage') or [])
+
+
+def pick_on_screen(scene):
+    """
+    Seconds of this scene that show the presenter: a random length in the
+    on-screen range, or the whole scene if it has no footage to cut to or would
+    leave too little of it to look intentional.
+    """
+    narration = scene.get('duration', 0)
+    if not has_footage(scene):
+        return narration
+    low, high = on_screen_range()
+    seconds = min(random.uniform(low, high), narration)
+    if narration - seconds < MIN_CUTAWAY:
+        seconds = narration if narration <= high else narration - MIN_CUTAWAY
+    return seconds
 
 
 def default_avatar_layout():
@@ -71,21 +127,23 @@ def plan_avatar_scenes(script_data, fits, eligible):
     Picks the avatar scenes for the 'auto' layout. Returns sorted scene indices.
 
     - The hook (scene 1) always opens on the avatar.
-    - The total starts at a random 3-5; every scene with poor footage (fit <=
-      POOR_FIT, or none found) beyond that raises it, up to 8.
+    - The total starts at a random count in avatar_clip_range(); every scene with
+      poor footage (fit <= POOR_FIT, or none found) beyond that raises it, never
+      past the top of the range.
     - Poorest-fitting scenes are taken first; the rest are drawn at random,
       weighted towards weaker footage, so videos don't all look the same.
 
     fits: {index: 0-10} from ContentBrain.rate_footage_fit.
-    eligible: indices the avatar can cover (lip-synced clips can't run past the clip cap).
+    eligible: indices the avatar can cover (see AvatarGenerator.can_render).
     """
     eligible = [i for i in eligible if i < len(script_data)]
     if not eligible:
         return []
 
     poor = sorted((i for i in eligible if i != 0 and fits.get(i, 5) <= POOR_FIT), key=lambda i: fits.get(i, 5))
-    base = random.randint(AUTO_MIN, AUTO_BASE_MAX)
-    count = min(AUTO_MAX, max(base, 1 + len(poor)), len(eligible))
+    fewest, most = avatar_clip_range()
+    base = random.randint(fewest, most)
+    count = min(most, max(base, 1 + len(poor)), len(eligible))
 
     chosen = [0] if 0 in eligible else []
     for i in poor:
@@ -104,6 +162,19 @@ def plan_avatar_scenes(script_data, fits, eligible):
     print(f"🎲 Avatar plan: {len(chosen)} scenes {[script_data[i]['id'] for i in chosen]} "
           f"({weak} replace weak footage, base {base})")
     return chosen
+
+
+def _shuffled_cycle(options):
+    return itertools.cycle(random.sample(options, len(options)))
+
+
+def _spoken_part(scene, on_screen):
+    """The scene with its text cut to roughly what is said in the seconds she is on screen."""
+    duration = scene.get('duration') or on_screen
+    if on_screen >= duration:
+        return scene
+    words = scene['text'].split()
+    return {**scene, 'text': " ".join(words[:math.ceil(len(words) * on_screen / duration)])}
 
 
 def pick_reference_image():
@@ -145,14 +216,14 @@ class AvatarGenerator:
         self.url = (os.getenv("COMFYUI_URL") or DEFAULT_COMFYUI_URL).rstrip("/")
         self.workflow_path = os.getenv("COMFYUI_WORKFLOW") or os.path.join(os.getcwd(), DEFAULT_WORKFLOW)
         self.timeout = int(os.getenv("COMFYUI_TIMEOUT") or 1800)
-        self.max_seconds = int(os.getenv("AVATAR_MAX_SECONDS") or 10)
-        # Shorter lines still get a clip this long; the composer trims it to the narration.
-        self.min_seconds = min(self.max_seconds, int(os.getenv("AVATAR_MIN_SECONDS") or 5))
+        self.max_seconds = max(RENDER_CAP, on_screen_range()[1])
         self.lipsync_attempts = max(1, int(os.getenv("AVATAR_LIPSYNC_ATTEMPTS") or DEFAULT_LIPSYNC_ATTEMPTS))
         self.persona = os.getenv("AVATAR_PERSONA") or DEFAULT_PERSONA
         self.reference_image = pick_reference_image()
         # Horizontal centre of the portrait crop taken from a wider reference image (0 = left, 1 = right).
         self.focus_x = min(1.0, max(0.0, float(os.getenv("AVATAR_FOCUS_X") or 0.5)))
+        # Height of her face in the reference image (0 = top, 1 = bottom), which reframed shots keep in view.
+        self.focus_y = min(1.0, max(0.0, float(os.getenv("AVATAR_FOCUS_Y") or 0.3)))
 
         size = (os.getenv("AVATAR_SIZE") or DEFAULT_SIZE).lower().split("x")
         try:
@@ -201,8 +272,9 @@ class AvatarGenerator:
         return workflow, fields
 
     def can_render(self, scene):
-        """A lip-synced clip must cover the whole line; looping it would desync the mouth."""
-        return not self.lipsync or math.ceil(scene.get('duration', 0) + 0.5) <= self.max_seconds
+        """With nothing to cut to, a lip-synced clip must cover the whole line; looping it would desync the mouth."""
+        return (not self.lipsync or has_footage(scene)
+                or math.ceil(scene.get('duration', 0) + 0.5) <= self.max_seconds)
 
     def is_reachable(self):
         try:
@@ -247,22 +319,30 @@ class AvatarGenerator:
             print(f"   ❌ ComfyUI is not reachable at {self.url} — skipping avatar clips.")
             return clips
 
-        try:
-            if self.reference_image:
-                reference = self._upload(self._portrait_crop(self.reference_image), "aishorts_avatar_ref.png")
-        except Exception as e:
-            print(f"   ❌ Could not upload the reference image: {e}")
-            return clips
+        framings = _shuffled_cycle(FRAMINGS)
+        camera_moves = _shuffled_cycle(CAMERA_MOVES)
+        gestures = _shuffled_cycle(GESTURES)
 
         for number, i in enumerate(indices, 1):
             scene = script_data[i]
-            needed = math.ceil(scene.get('duration', self.max_seconds) + 0.5)
-            if self.lipsync and needed > self.max_seconds:
+            on_screen = scene.get('avatar_seconds') or scene.get('duration', self.max_seconds)
+            needed = math.ceil(on_screen + 0.5)
+            if self.lipsync and on_screen > self.max_seconds:
                 # Looping a lip-synced clip would put the mouth out of step with the voice.
                 print(f"   ⚠️ Scene {scene['id']} narration is longer than {self.max_seconds}s — using stock footage.")
                 continue
-            seconds = min(self.max_seconds, max(self.min_seconds, needed))
-            action = brain.write_avatar_prompt(scene, seconds, speaking=self.lipsync)
+            seconds = min(self.max_seconds, needed)
+
+            try:
+                if self.reference_image:
+                    reference = self._upload(self._portrait_crop(self.reference_image, next(framings)),
+                                             "aishorts_avatar_ref.png")
+            except Exception as e:
+                print(f"   ❌ Could not upload the reference image: {e}")
+                return clips
+
+            action = brain.write_avatar_prompt(_spoken_part(scene, on_screen), seconds, speaking=self.lipsync,
+                                               camera=next(camera_moves), gesture=next(gestures))
             # The reference image already shows the persona; restating it fights the image.
             prompt = action if reference else f"{self.persona}\n\n{action}"
 
@@ -270,7 +350,7 @@ class AvatarGenerator:
             print(f"   🎬 Clip {number}/{len(indices)} · scene {scene['id']}: {seconds}s {mode}")
             try:
                 if self.lipsync:
-                    clip = self._render_speaking(scene, prompt, reference, seconds)
+                    clip = self._render_speaking(scene, prompt, reference, seconds, on_screen)
                 else:
                     clip = self._render(prompt, reference, None, seconds, f"avatar_scene_{scene['id']}")
             except Exception as e:
@@ -288,31 +368,31 @@ class AvatarGenerator:
 
         return clips
 
-    def _render_speaking(self, scene, prompt, reference, seconds):
+    def _render_speaking(self, scene, prompt, reference, seconds, on_screen):
         """
         Renders a lip-synced clip, on a new seed each time, until her mouth moves
-        during the narration. Returns None if it never does: an avatar that sits
-        silent over the voice is worse than the stock footage.
+        during the part that gets shown. Returns None if it never does: an avatar
+        that sits silent over the voice is worse than the stock footage.
         """
         audio = self._upload(self._narration(scene, seconds), "aishorts_avatar_voice.wav")
         for attempt in range(1, self.lipsync_attempts + 1):
             clip = self._render(prompt, reference, audio, seconds, f"avatar_scene_{scene['id']}")
             if not clip:
                 return None
-            movement = self._mouth_movement(clip, scene)
+            movement = self._mouth_movement(clip, on_screen)
             if movement is None or movement >= MIN_MOUTH_MOVEMENT:
                 return clip
             print(f"      ⚠️ Her mouth barely moves ({movement:.3f}, attempt {attempt}/{self.lipsync_attempts}).")
         print(f"   ❌ Scene {scene['id']} never lip-synced — using stock footage.")
         return None
 
-    def _mouth_movement(self, clip, scene):
+    def _mouth_movement(self, clip, seconds):
         """Returns the clip's mouth movement, or None when it can't be measured, which accepts the clip."""
         try:
             # Imported here so runs without lip-sync never need mediapipe installed.
             from modules.lip_check import mouth_movement
 
-            return mouth_movement(clip, scene['duration'])
+            return mouth_movement(clip, seconds)
         except Exception as e:
             print(f"      ⚠️ Could not check the lip-sync, keeping the clip unchecked: {e}")
             return None
@@ -414,18 +494,20 @@ class AvatarGenerator:
         data = response.json()
         return f"{data['subfolder']}/{data['name']}" if data.get("subfolder") else data["name"]
 
-    def _portrait_crop(self, path):
+    def _portrait_crop(self, path, zoom=1.0):
         """
-        Crops the reference image to the render aspect ratio around AVATAR_FOCUS_X.
-        The workflow would otherwise centre-crop it, cutting off an off-centre presenter.
+        Crops the reference image to the render aspect ratio around AVATAR_FOCUS_X,
+        `zoom` times closer than the widest crop that fits. The workflow would
+        otherwise centre-crop it, cutting off an off-centre presenter.
         """
         crop_path = os.path.join(self.clips_dir, "avatar_ref.png")
         aspect = self.width / self.height
         (
             ffmpeg.input(path)
             .filter('crop',
-                    f'min(iw,ih*{aspect})', f'min(ih,iw/{aspect})',
-                    f'max(0,min(iw-ow,iw*{self.focus_x}-ow/2))', '(ih-oh)/2')
+                    f'min(iw,ih*{aspect})/{zoom}', f'min(ih,iw/{aspect})/{zoom}',
+                    f'max(0,min(iw-ow,iw*{self.focus_x}-ow/2))',
+                    f'max(0,min(ih-oh,ih*{self.focus_y}-oh*{FACE_LINE}))')
             .output(crop_path, vframes=1)
             .run(overwrite_output=True, quiet=True)
         )

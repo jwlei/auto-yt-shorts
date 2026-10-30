@@ -21,10 +21,26 @@ class Composer:
         except:
             return 0.0
 
+    def _stock_stream(self, path, duration):
+        # force_original_aspect_ratio='increase' fills the 9:16 frame and
+        # lets the crop trim the overflow; a bare scale would squash any
+        # stock clip returned in a different aspect ratio.
+        return (
+            ffmpeg.input(path, stream_loop=-1)
+            .trim(duration=duration)
+            .setpts('PTS-STARTPTS')
+            .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
+            .filter('crop', 1080, 1920)
+            .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
+            .filter('fps', fps=30, round='up')
+        )
+
     def process_scene(self, scene, video_pair, is_avatar=False):
         """
         Combines Audio with Visuals.
-        - If Avatar: Loop single video (+ CROP LOGO on the static avatar).
+        - If Avatar: video_pair is (avatar clip, stock clip or None). Loops the clip
+          (+ CROP LOGO on the static avatar), for scene['avatar_seconds'] if that is
+          set, then cuts to the stock clip while the voice carries on.
         - If Stock: Split duration 50/50 between Video A and Video B.
         """
         scene_id = scene['id']
@@ -40,9 +56,12 @@ class Composer:
                 is_static = video_pair[0] == self.avatar_path
                 print(f"   ⚙️ Processing Scene {scene_id}: 🤖 Avatar Mode ({'Cropped' if is_static else 'Generated'})")
 
+                on_screen = scene.get('avatar_seconds') or total_duration
+                cutaway = video_pair[1] if on_screen < total_duration else None
+
                 video_stream = (
                     ffmpeg.input(video_pair[0], stream_loop=-1)
-                    .trim(duration=total_duration + 0.5)
+                    .trim(duration=on_screen if cutaway else total_duration + 0.5)
                     .setpts('PTS-STARTPTS')
                 )
 
@@ -64,36 +83,17 @@ class Composer:
                     .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
                     .filter('fps', fps=30, round='up')
                 )
+                if cutaway:
+                    print(f"      ✂️ On screen {on_screen:.1f}s of {total_duration:.1f}s, then stock footage")
+                    video_stream = ffmpeg.concat(
+                        video_stream, self._stock_stream(cutaway, total_duration - on_screen + 0.5), v=1, a=0)
             else:
                 # --- DUAL VIDEO MODE (50/50 Split) ---
                 print(f"   ⚙️ Processing Scene {scene_id}: 🎞️ A/B Split Mode")
                 path_a, path_b = video_pair
-                
-                duration_a = total_duration / 2
-                duration_b = (total_duration / 2) + 0.5 
 
-                # force_original_aspect_ratio='increase' fills the 9:16 frame and
-                # lets the crop trim the overflow; a bare scale would squash any
-                # stock clip returned in a different aspect ratio.
-                stream_a = (
-                    ffmpeg.input(path_a, stream_loop=-1)
-                    .trim(duration=duration_a)
-                    .setpts('PTS-STARTPTS')
-                    .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
-                    .filter('crop', 1080, 1920)
-                    .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
-                    .filter('fps', fps=30, round='up')
-                )
-
-                stream_b = (
-                    ffmpeg.input(path_b, stream_loop=-1)
-                    .trim(duration=duration_b)
-                    .setpts('PTS-STARTPTS')
-                    .filter('scale', 1080, 1920, force_original_aspect_ratio='increase')
-                    .filter('crop', 1080, 1920)
-                    .filter('setsar', 1)  # Some stock clips have non-square pixels; concat rejects mixed SARs
-                    .filter('fps', fps=30, round='up')
-                )
+                stream_a = self._stock_stream(path_a, total_duration / 2)
+                stream_b = self._stock_stream(path_b, (total_duration / 2) + 0.5)
 
                 video_stream = ffmpeg.concat(stream_a, stream_b, v=1, a=0)
 
@@ -161,7 +161,8 @@ class Composer:
 
             # Injection Logic: Check if current index is in our chosen list
             if i in avatar_clips:
-                current_pair = (avatar_clips[i], None)
+                # visual_2 matches the end of the line, which is what a cutaway shows.
+                current_pair = (avatar_clips[i], current_pair[1] if current_pair else None)
                 is_avatar = True
             elif current_pair is None:
                 continue 

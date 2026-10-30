@@ -11,7 +11,7 @@ from modules.brain import ContentBrain
 from modules.asset_manager import AssetManager, PROVIDER_KEYS, get_provider
 from modules.audio import AudioEngine, get_tts_provider
 from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
-                                      get_avatar_source, plan_avatar_scenes)
+                                      get_avatar_source, pick_on_screen, plan_avatar_scenes)
 from modules.composer import Composer
 from modules.topic_history import find_exact_repeat, read_successful_topics, record_successful_topic
 
@@ -230,8 +230,8 @@ async def generate_one(args):
     composer = Composer()
 
     # 4a. AVATAR: Decide which scenes show the presenter now that we know what
-    # stock footage we have. 'auto' (default) opens on the avatar and uses 3-8
-    # avatar scenes, more when the LLM rates the footage a poor fit.
+    # stock footage we have. 'auto' (default) opens on the avatar and picks a count
+    # from AVATAR_CLIPS_MIN-MAX, higher when the LLM rates the footage a poor fit.
     stage("Avatar clips", upload)
     layout = getattr(args, 'avatar_clips', None) or default_avatar_layout()
     source = get_avatar_source()
@@ -251,6 +251,8 @@ async def generate_one(args):
             indices = plan_avatar_scenes(script, brain.rate_footage_fit(script), eligible)
         else:
             indices = composer.pick_avatar_indices(script, int(layout))
+    for i in indices:
+        script[i]['avatar_seconds'] = pick_on_screen(script[i])
 
     avatar_clips = {}
     if indices and generator:
@@ -362,9 +364,10 @@ def parse_args(argv=None):
     parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default="private",
                         help="Privacy status for uploads (default: private).")
     parser.add_argument("--avatar-clips", choices=AVATAR_LAYOUTS,
-                        help="auto = open on the avatar, 3-8 avatar scenes in total, more where the stock footage "
-                             "fits the narration badly; 3 = open on it + two middle scenes; 2 = two middle scenes "
-                             "only; 0 = no avatar (default: AVATAR_CLIPS from .env, else auto).")
+                        help="auto = open on the avatar, AVATAR_CLIPS_MIN to AVATAR_CLIPS_MAX avatar scenes in total "
+                             "(default 3-5), more where the stock footage fits the narration badly; 3 = open on it + "
+                             "two middle scenes; 2 = two middle scenes only; 0 = no avatar (default: AVATAR_CLIPS "
+                             "from .env, else auto).")
 
     args = parser.parse_args(argv)
     if args.runs < 1:

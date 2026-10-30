@@ -17,7 +17,7 @@ Automated faceless YouTube Shorts: AI script, natural narration, stock footage a
 - **Pro Transitions:** Randomly applies `xfade` (fade, slide, wipes) between scenes.
 - **Silence Removal:** Automatically trims dead air from AI voice generation.
 
-- **Avatar Injection:** Opens on your presenter and brings her back for 3-8 scenes in total, giving her the scenes where the stock footage fits the narration worst (Gemini rates the footage once it is downloaded) — generated and lip-synced with ComfyUI.
+- **Avatar Injection:** Opens on your presenter and brings her back for 3-5 scenes in total (adjustable), giving her the scenes where the stock footage fits the narration worst (Gemini rates the footage once it is downloaded) — generated and lip-synced with ComfyUI.
 - **Windows Ready:** Includes specific FFmpeg flags (`yuv420p`, `faststart`) to prevent corruption errors (`0x80004005`) on Windows Media Player.
 
 ---
@@ -120,9 +120,11 @@ Optional:
 
 ### 5. Optional: Generated Avatar Clips (ComfyUI)
 
-With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default (`auto`) the video **opens on the avatar** (the hook) and she appears in 3-8 scenes in total. The scenes are picked **after** the stock footage is downloaded: Gemini rates 0-10 how well each scene's footage matches its line, the total starts at a random 3-5 and rises (up to 8) for every scene with poor footage (rated 4 or lower, or nothing found), and the weakest-footage scenes go to the avatar first, the rest at random weighted towards weaker footage. Fixed layouts are still available: `--avatar-clips 3` (hook + two random middle scenes), `2` (two middle scenes only) or `0` (none).
+With `AVATAR_SOURCE=comfyui`, the avatar scenes are rendered fresh by a local ComfyUI server instead of looping `avatars.mp4`. By default (`auto`) the video **opens on the avatar** (the hook) and she appears in 3-5 scenes in total (`AVATAR_CLIPS_MIN`/`MAX`, or the panel's *Clips per video* slider). The scenes are picked **after** the stock footage is downloaded: Gemini rates 0-10 how well each scene's footage matches its line, the total starts at a random number in the range and rises (never past its top) for every scene with poor footage (rated 4 or lower, or nothing found), and the weakest-footage scenes go to the avatar first, the rest at random weighted towards weaker footage. Fixed layouts are still available: `--avatar-clips 3` (hook + two random middle scenes), `2` (two middle scenes only) or `0` (none).
 
 The presenter is **lip-synced** to the narration: each scene's voiceover is fed into the workflow and LTX generates her mouth and face to match it. Gemini writes a prompt for each clip that has her say the line to camera.
+
+She stays on screen for a random 3-6 seconds each time (`AVATAR_MIN_SECONDS`/`MAX`, or the panel's *Clip length* slider); a longer line then cuts to that scene's stock footage while her voice carries on. So clips of one video don't look alike, each opens on its own framing of the reference image and gets its own camera move and gesture.
 
 - `comfyui/avatar_lipsync.json` (default) is the workflow in API format (ComfyUI → Workflow → **Export (API)**): LTX-2.3 I2V/T2V plus three nodes that load the narration, encode it, and mask it so the audio is kept and only the video is generated.
 - `comfyui/avatar_workflow.json` is the same workflow without lip-sync: the presenter reacts silently while the narration plays over her. Point `COMFYUI_WORKFLOW` at it to use it.
@@ -131,15 +133,17 @@ The presenter is **lip-synced** to the narration: each scene's voiceover is fed 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AVATAR_CLIPS` | `auto` | `auto` = hook + 3-8 scenes chosen by footage fit; `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
+| `AVATAR_CLIPS` | `auto` | `auto` = hook + a range of scenes chosen by footage fit; `3` = hook + two middle scenes; `2` = two middle scenes only; `0` = no avatar |
+| `AVATAR_CLIPS_MIN`, `AVATAR_CLIPS_MAX` | `3`, `5` | Fewest and most avatar scenes per video with `auto` |
 | `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI server (from Docker use `http://host.docker.internal:8188`) |
 | `COMFYUI_WORKFLOW` | `comfyui/avatar_lipsync.json` | API workflow; its map is the same name with `.map.json` |
 | `AVATAR_REFERENCE_IMAGE` | `assets/avatar/avatar*.jpg` | Persona image, or a glob of them: each video picks one at random and every clip in it is image-to-video from that image, so the persona stays the same within a video |
 | `AVATAR_FOCUS_X` | `0.5` | Where to take the portrait crop from a wider reference image (0 = left edge, 1 = right edge). Set it to the presenter's horizontal position |
+| `AVATAR_FOCUS_Y` | `0.3` | Height of her face in the reference image (0 = top, 1 = bottom), kept in view when a clip opens closer in |
 | `AVATAR_PERSONA` | built-in description | Used when no reference image matches: the first clip is text-to-video from this, and a frame of it becomes the reference for the rest |
 | `AVATAR_SIZE` | `736x1280` | Render size (portrait) |
-| `AVATAR_MIN_SECONDS` | `5` | Shortest clip rendered; the composer trims it to the scene's narration |
-| `AVATAR_MAX_SECONDS` | `10` | Clip length cap; each clip is sized to its scene's narration. With lip-sync, a scene whose narration runs longer uses stock footage instead |
+| `AVATAR_MIN_SECONDS` | `3` | Shortest time she stays on screen each time |
+| `AVATAR_MAX_SECONDS` | `6` | Longest time she stays on screen each time. A longer line cuts to stock footage while her voice carries on; a scene with no stock footage is covered whole, up to a 10 s render (or this value, if higher) |
 | `COMFYUI_TIMEOUT` | `1800` | Seconds to wait per clip |
 
 Each lip-synced clip is checked after rendering: if her mouth barely moves during the narration, it is rendered again on a new seed, up to `AVATAR_LIPSYNC_ATTEMPTS` (default `3`) times. Because that is several renders per clip, a run can take longer when clips fail the check. The first check downloads a small face-tracking model to `assets/models/`; if the check can't run, the clip is kept and the log says so.
@@ -193,7 +197,7 @@ python main.py --voice en-gb-storyteller-2 --output daily_short.mp4
 | `--check` | Run preflight checks (ffmpeg, API keys, avatar) and exit. |
 | `--upload` | Upload each finished video to YouTube (see below). |
 | `--privacy` | `private` (default), `unlisted`, or `public` for uploads. |
-| `--avatar-clips` | `auto` (default: hook + 3-8 scenes, more where the stock footage fits badly), `3` (hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
+| `--avatar-clips` | `auto` (default: hook + 3-5 scenes, more where the stock footage fits badly), `3` (hook + two middle scenes), `2` (two middle scenes only) or `0` (no avatar). Overrides `AVATAR_CLIPS`. |
 
 Schedule a daily short with cron:
 

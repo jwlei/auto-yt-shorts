@@ -336,27 +336,29 @@ class ContentBrain:
             "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
         }
 
-    def write_avatar_prompt(self, scene, seconds, speaking=False):
+    def write_avatar_prompt(self, scene, seconds, speaking=False, camera="slow push-in towards her face",
+                            gesture="gestures with both open hands"):
         """
         Writes a video-model prompt for the presenter clip shown during a scene.
         speaking=True: the presenter says the line (lip-synced to the narration).
         speaking=False: the narration plays over her, so she reacts instead.
+        camera and gesture differ per clip, so a video's clips don't all look alike.
         Describes action only: the persona's look comes from the reference image
         or AVATAR_PERSONA.
         """
         mood = scene.get('mood', 'engaging')
         if speaking:
             fallback = (f"The presenter looks into the camera and says in a clear British accent: \"{scene['text']}\" "
-                        f"Her expression is {mood}, with natural head movement and small hand gestures. "
-                        "Static medium shot. Quiet room tone.")
+                        f"Her expression is {mood}, and she {gesture}. "
+                        f"Camera: {camera}. Quiet room tone.")
             delivery = (f"- The presenter speaks this exact line to camera in a clear British accent: \"{scene['text']}\"\n"
                         "    - Quote the line word for word, then describe her expression, gestures and head movement while she says it.\n"
                         "    - Her mouth moves the whole time. Show the mood with her eyebrows, eyes and head; never a still, frozen, "
                         "vacant, unblinking or held expression, and never closed lips.")
         else:
-            fallback = (f"0-{seconds} seconds: The presenter looks into the camera with a {mood} expression, "
-                        "nods slowly and gestures with one open hand, mouth closed, listening. "
-                        "Static medium shot, subtle handheld movement. Soft ambient room sound, no speech.")
+            fallback = (f"0-{seconds} seconds: The presenter looks into the camera with a {mood} expression "
+                        f"and {gesture}, mouth closed, listening. "
+                        f"Camera: {camera}. Soft ambient room sound, no speech.")
             delivery = ("- The presenter does NOT speak: mouth closed, reacting to the line with expression and gestures.\n"
                         f"    - Write a short timeline of actions, e.g. \"0-4 seconds: ...\", \"4-{seconds} seconds: ...\".")
 
@@ -366,7 +368,9 @@ class ContentBrain:
 
     Rules:
     {delivery}
-    - Include one simple camera move. No music.
+    - Use this camera move, keeping her face in frame: {camera}. No other camera moves.
+    - While she does this, she {gesture}.
+    - No music.
     - Do NOT describe the presenter's appearance, clothes or room.
     - Under 100 words. Return ONLY the prompt text.
     """

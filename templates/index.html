@@ -32,6 +32,30 @@
   .ln.stage .x { color: var(--accent); font-weight: 700; }
   .hint { color: var(--muted); font-size: .78rem; margin-top: 5px; line-height: 1.4; }
   .hint b { color: var(--text); font-weight: 600; }
+  /* Two range inputs on one track: only their thumbs take the pointer. */
+  .range-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .range-head label { margin-bottom: 0; }
+  .range-head output { font-size: .85rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .range { position: relative; height: 26px; margin-top: 2px; }
+  .range::before, .range .fill { content: ""; position: absolute; top: 11px; height: 4px; border-radius: 2px; }
+  .range::before { left: 0; right: 0; background: var(--line); }
+  .range .fill { background: var(--accent); }
+  #form .range input[type=range] {
+    position: absolute; inset: 0; width: 100%; height: 26px; margin: 0; padding: 0;
+    background: none; border: 0; outline: 0; appearance: none; -webkit-appearance: none; pointer-events: none;
+  }
+  .range input::-webkit-slider-runnable-track { background: none; }
+  .range input::-moz-range-track { background: none; }
+  .range input::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: auto; cursor: pointer;
+    width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel);
+  }
+  .range input::-moz-range-thumb {
+    pointer-events: auto; cursor: pointer; box-sizing: border-box;
+    width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel);
+  }
+  .range input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); }
+  .range input:focus-visible::-moz-range-thumb { outline: 2px solid var(--text); }
   h2 { font-size: .95rem; margin: 0 0 4px; }
   .section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 4px; }
   .form-col:first-child > .section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
@@ -214,14 +238,32 @@
       <div class="section-title">Avatar (presenter)</div>
       <label for="avatar_clips">When she appears</label>
       <select id="avatar_clips" name="avatar_clips">
-        <option value="auto">Auto — opens the video, 3–8 clips, more where stock footage is weak</option>
+        <option value="auto">Auto — opens the video, then the scenes with the weakest stock footage</option>
         <option value="3">Opens the video + 2 middle scenes (3 clips)</option>
         <option value="2">2 middle scenes only (2 clips)</option>
         <option value="0">No avatar — stock footage only</option>
       </select>
-      <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage — a random 3–5 scenes, up to 8 when the footage is poor. The opening (hook) scene is always her. Each 5–10 s clip adds ~4–5 min of GPU time, so auto adds ~15–40 min per video. Each video uses a random <code>assets/avatar/avatar*.jpg</code> as her look.</div>
+      <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage. The opening (hook) scene is always her. Each video uses a random <code>assets/avatar/avatar*.jpg</code> as her look.</div>
 
       <div id="avatarOpts">
+        <div id="clipsSlider">
+          <div class="range-head"><label>Clips per video</label><output id="clipsText"></output></div>
+          <div class="range" id="clipsRange">
+            <div class="fill"></div>
+            <input type="range" name="avatar_clips_min" min="1" max="9" value="3" aria-label="Fewest clips per video">
+            <input type="range" name="avatar_clips_max" min="1" max="9" value="5" aria-label="Most clips per video">
+          </div>
+          <div class="hint">Each video picks a number in this range, towards the top when the stock footage is weak.</div>
+        </div>
+        <div class="range-head"><label>Clip length</label><output id="secondsText"></output></div>
+        <div class="range" id="secondsRange">
+          <div class="fill"></div>
+          <input type="range" name="avatar_seconds_min" min="2" max="10" value="3" aria-label="Shortest clip in seconds">
+          <input type="range" name="avatar_seconds_max" min="2" max="10" value="6" aria-label="Longest clip in seconds">
+        </div>
+        <div class="hint">How long she stays on screen each time. A longer line then cuts to stock footage while her voice carries on.</div>
+        <div class="hint" id="avatarMix"></div>
+
         <div class="row">
           <div>
             <label for="avatar_source">Source</label>
@@ -357,6 +399,10 @@ let lastVideos = { output: [], uploaded: [] };
 const DEFAULTS = {
   avatar_source: {{ (defaults.avatar_source if defaults.avatar_source in ['comfyui', 'static'] else 'comfyui') | tojson }},
   avatar_clips: {{ defaults.avatar_clips | tojson }},
+  avatar_clips_min: {{ defaults.avatar_clips_min | tojson }},
+  avatar_clips_max: {{ defaults.avatar_clips_max | tojson }},
+  avatar_seconds_min: {{ defaults.avatar_seconds_min | tojson }},
+  avatar_seconds_max: {{ defaults.avatar_seconds_max | tojson }},
 };
 
 // --- Remember the last options (per browser) ---
@@ -386,9 +432,44 @@ function loadForm() {
 }
 function syncForm() {
   $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
+  $('clipsSlider').classList.toggle('hidden', $('avatar_clips').value !== 'auto');
   $('avatar_style').disabled = $('avatar_source').value !== 'comfyui';
+  syncSliders();
 }
 $('form').addEventListener('change', () => { syncForm(); saveForm(); });
+
+// --- Avatar sliders ---
+// A typical video, for the estimate of how much of it is her.
+const TYPICAL_VIDEO = 50, TYPICAL_SCENE = 5.5;
+function syncRange(id, moved) {
+  const box = $(id);
+  const [low, high] = box.querySelectorAll('input');
+  // The thumbs push each other along instead of crossing.
+  if (+low.value > +high.value) {
+    if (moved === high) low.value = high.value; else high.value = low.value;
+  }
+  const at = input => (input.value - input.min) / (input.max - input.min) * 100;
+  box.querySelector('.fill').style.left = `${at(low)}%`;
+  box.querySelector('.fill').style.right = `${100 - at(high)}%`;
+  return [+low.value, +high.value];
+}
+function syncSliders(moved) {
+  const [fewest, most] = syncRange('clipsRange', moved);
+  const [shortest, longest] = syncRange('secondsRange', moved);
+  $('clipsText').textContent = fewest === most ? `${most}` : `${fewest}–${most}`;
+  $('secondsText').textContent = shortest === longest ? `${longest} s` : `${shortest}–${longest} s`;
+
+  const layout = $('avatar_clips').value;
+  const [low, high] = layout === 'auto' ? [fewest, most] : [+layout, +layout];
+  const least = Math.round(low * Math.min(shortest, TYPICAL_SCENE));
+  const greatest = Math.round(high * Math.min(longest, TYPICAL_SCENE));
+  const share = s => Math.min(100, Math.round(100 * s / TYPICAL_VIDEO));
+  const span = (a, b) => a === b ? `${a}` : `${a}–${b}`;
+  $('avatarMix').innerHTML = `<b>About ${span(share(least), share(greatest))}% presenter</b> (${span(least, greatest)} s of a typical ${TYPICAL_VIDEO} s video), the rest stock footage.`;
+}
+for (const id of ['clipsRange', 'secondsRange']) {
+  $(id).addEventListener('input', e => syncSliders(e.target));
+}
 
 // --- Videos ---
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -518,7 +599,7 @@ const STAGE_HINTS = {
   'Topic & script': 'Gemini is picking the topic and writing the scenes.',
   'Voice': 'Gemini TTS is reading the whole script in one take, then it is cut into scenes.',
   'Stock footage': 'Downloading two stock clips per scene.',
-  'Avatar clips': 'Rating the stock footage, picking the presenter scenes, then ComfyUI generates each clip on your GPU — the slowest step (~4–5 min per clip).',
+  'Avatar clips': 'Rating the stock footage, picking the presenter scenes, then ComfyUI generates each clip on your GPU — the slowest step.',
   'Rendering scenes': 'ffmpeg is combining each scene’s footage with its voice.',
   'Stitching': 'Joining the scenes with transitions into the final video.',
   'Upload': 'Writing the title and description, then uploading to YouTube.',
