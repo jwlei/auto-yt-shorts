@@ -258,10 +258,12 @@ async def generate_one(args):
             avatar_clips = generator.generate(script, indices, brain)
         except Exception as e:
             print(f"❌ Avatar Error: {e}")
-    # A failed render still gets an avatar if the static clip exists; otherwise stock footage.
-    for i in indices:
-        if i not in avatar_clips and has_static:
-            avatar_clips[i] = composer.avatar_path
+    # A failed render still gets an avatar if the static clip exists; otherwise stock
+    # footage. Never with lip-sync on: the static clip doesn't speak the line.
+    if has_static and not (generator and generator.lipsync):
+        for i in indices:
+            if i not in avatar_clips:
+                avatar_clips[i] = composer.avatar_path
 
     stage("Rendering scenes", upload)
     final_scene_paths = composer.render_all_scenes(script, assets_map, avatar_clips)

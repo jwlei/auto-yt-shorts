@@ -23,6 +23,7 @@ Thumbs.db
 /assets/temp
 /assets/video_clips
 /assets/search_cache
+/assets/models
 __pycache__/
 *.pyc
 /assets/avatar/avatar.mp4

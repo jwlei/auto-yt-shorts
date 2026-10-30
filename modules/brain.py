@@ -24,6 +24,13 @@ RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
 # anything worth blocking a run on.
 MAX_RETRY_WAIT = 90
 
+# LTX follows the prompt over the audio: a held expression ("grim", "vacant")
+# keeps her mouth shut while the narration plays. Goes around every speaking
+# prompt, whatever the model wrote.
+SPEAKING_LEAD = ("The presenter is talking to the camera the whole time: her lips and jaw move clearly "
+                 "with every word, her mouth opening and closing as she speaks. ")
+SPEAKING_TAIL = " She keeps talking throughout, mouth moving on every syllable."
+
 def _get_client():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -357,7 +364,9 @@ class ContentBrain:
                         f"Her expression is {mood}, with natural head movement and small hand gestures. "
                         "Static medium shot. Quiet room tone.")
             delivery = (f"- The presenter speaks this exact line to camera in a clear British accent: \"{scene['text']}\"\n"
-                        "    - Quote the line word for word, then describe her expression, gestures and head movement while she says it.")
+                        "    - Quote the line word for word, then describe her expression, gestures and head movement while she says it.\n"
+                        "    - Her mouth moves the whole time. Show the mood with her eyebrows, eyes and head; never a still, frozen, "
+                        "vacant, unblinking or held expression, and never closed lips.")
         else:
             fallback = (f"0-{seconds} seconds: The presenter looks into the camera with a {mood} expression, "
                         "nods slowly and gestures with one open hand, mouth closed, listening. "
@@ -380,8 +389,9 @@ class ContentBrain:
             text = _generate(prompt).text.strip()
         except Exception as e:
             print(f"   ⚠️ Avatar prompt failed ({e}). Using a generic reaction.")
-            return fallback
-        return text or fallback
+            text = ""
+        text = text or fallback
+        return f"{SPEAKING_LEAD}{text}{SPEAKING_TAIL}" if speaking else text
 
     def rate_footage_fit(self, script_data):
         """

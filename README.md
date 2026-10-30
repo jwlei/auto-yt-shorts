@@ -141,7 +141,9 @@ The presenter is **lip-synced** to the narration: each scene's voiceover is fed 
 | `AVATAR_MAX_SECONDS` | `10` | Clip length cap; each clip is sized to its scene's narration. With lip-sync, a scene whose narration runs longer uses stock footage instead |
 | `COMFYUI_TIMEOUT` | `1800` | Seconds to wait per clip |
 
-If a render fails, that scene falls back to `avatars.mp4` (if present) or its stock footage.
+Each lip-synced clip is checked after rendering: if her mouth barely moves during the narration, it is rendered again on a new seed, up to `AVATAR_LIPSYNC_ATTEMPTS` (default `3`) times. Because that is several renders per clip, a run can take longer when clips fail the check. The first check downloads a small face-tracking model to `assets/models/`; if the check can't run, the clip is kept and the log says so.
+
+If a render fails, or a clip never passes the check, that scene uses its stock footage. With the silent workflow, a failed render falls back to `avatars.mp4` (if present) first; lip-synced scenes never do, since the static clip doesn't speak the line.
 
 ---
 

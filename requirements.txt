@@ -9,3 +9,4 @@ google-auth-httplib2>=0.1.0
 google-auth-oauthlib>=1.0.0
 flask>=3.0.0
 websocket-client>=1.8.0
+mediapipe>=1.2.0

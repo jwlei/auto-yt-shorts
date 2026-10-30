@@ -37,6 +37,11 @@ VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 SEED_INPUTS = ("seed", "noise_seed")
 POLL_INTERVAL = 5
 
+# Spread of the lip gap (see lip_check.mouth_movement) below which a lip-synced
+# clip counts as not speaking. Measured clips: not speaking at most 0.016, speaking at least 0.034.
+MIN_MOUTH_MOVEMENT = 0.025
+DEFAULT_LIPSYNC_ATTEMPTS = 3
+
 
 # Which scenes show the avatar:
 #   auto - opens on it, then 3-8 avatar scenes in total, picked after the stock
@@ -143,6 +148,7 @@ class AvatarGenerator:
         self.max_seconds = int(os.getenv("AVATAR_MAX_SECONDS") or 10)
         # Shorter lines still get a clip this long; the composer trims it to the narration.
         self.min_seconds = min(self.max_seconds, int(os.getenv("AVATAR_MIN_SECONDS") or 5))
+        self.lipsync_attempts = max(1, int(os.getenv("AVATAR_LIPSYNC_ATTEMPTS") or DEFAULT_LIPSYNC_ATTEMPTS))
         self.persona = os.getenv("AVATAR_PERSONA") or DEFAULT_PERSONA
         self.reference_image = pick_reference_image()
         # Horizontal centre of the portrait crop taken from a wider reference image (0 = left, 1 = right).
@@ -263,8 +269,10 @@ class AvatarGenerator:
             mode = "image-to-video" if reference else "text-to-video"
             print(f"   🎬 Clip {number}/{len(indices)} · scene {scene['id']}: {seconds}s {mode}")
             try:
-                audio = self._upload(self._narration(scene, seconds), "aishorts_avatar_voice.wav") if self.lipsync else None
-                clip = self._render(prompt, reference, audio, seconds, f"avatar_scene_{scene['id']}")
+                if self.lipsync:
+                    clip = self._render_speaking(scene, prompt, reference, seconds)
+                else:
+                    clip = self._render(prompt, reference, None, seconds, f"avatar_scene_{scene['id']}")
             except Exception as e:
                 print(f"   ❌ Scene {scene['id']} avatar failed: {e}")
                 clip = None
@@ -279,6 +287,35 @@ class AvatarGenerator:
                     print(f"   ⚠️ Could not reuse scene {scene['id']} as the persona reference: {e}")
 
         return clips
+
+    def _render_speaking(self, scene, prompt, reference, seconds):
+        """
+        Renders a lip-synced clip, on a new seed each time, until her mouth moves
+        during the narration. Returns None if it never does: an avatar that sits
+        silent over the voice is worse than the stock footage.
+        """
+        audio = self._upload(self._narration(scene, seconds), "aishorts_avatar_voice.wav")
+        for attempt in range(1, self.lipsync_attempts + 1):
+            clip = self._render(prompt, reference, audio, seconds, f"avatar_scene_{scene['id']}")
+            if not clip:
+                return None
+            movement = self._mouth_movement(clip, scene)
+            if movement is None or movement >= MIN_MOUTH_MOVEMENT:
+                return clip
+            print(f"      ⚠️ Her mouth barely moves ({movement:.3f}, attempt {attempt}/{self.lipsync_attempts}).")
+        print(f"   ❌ Scene {scene['id']} never lip-synced — using stock footage.")
+        return None
+
+    def _mouth_movement(self, clip, scene):
+        """Returns the clip's mouth movement, or None when it can't be measured, which accepts the clip."""
+        try:
+            # Imported here so runs without lip-sync never need mediapipe installed.
+            from modules.lip_check import mouth_movement
+
+            return mouth_movement(clip, scene['duration'])
+        except Exception as e:
+            print(f"      ⚠️ Could not check the lip-sync, keeping the clip unchecked: {e}")
+            return None
 
     # --- ComfyUI API ---
 
