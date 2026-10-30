@@ -250,15 +250,13 @@
           <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run authorize_youtube.py once).</div>
         </span>
       </label>
-      <div id="privacyWrap" class="hidden">
-        <label for="privacy">Privacy</label>
-        <select id="privacy" name="privacy">
-          <option value="private">Private — only you</option>
-          <option value="unlisted">Unlisted — anyone with the link</option>
-          <option value="public">Public</option>
-        </select>
-        <div class="hint">YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
-      </div>
+      <label for="privacy">Privacy</label>
+      <select id="privacy" name="privacy">
+        <option value="public" selected>Public</option>
+        <option value="unlisted">Unlisted — anyone with the link</option>
+        <option value="private">Private — only you</option>
+      </select>
+      <div class="hint">For uploads when a run finishes and for the Upload buttons under Ready. YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
     </div>
 
     <div class="section" id="formAdvanced">
@@ -351,7 +349,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const STORE_KEY = 'autoshorts.form.v2';  // v2: avatar layout gained 'auto' as the default
+const STORE_KEY = 'autoshorts.form.v3';  // v3: privacy became public by default; older saves kept the old default
 let autoScroll = true;
 let folder = 'output';
 let lastVideos = { output: [], uploaded: [] };
@@ -372,7 +370,13 @@ function saveForm() {
 }
 function loadForm() {
   let data = {};
-  try { data = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) {}
+  try {
+    data = JSON.parse(localStorage.getItem(STORE_KEY));
+    if (!data) {
+      data = JSON.parse(localStorage.getItem('autoshorts.form.v2'));
+      if (data) delete data.privacy;
+    }
+  } catch (e) {}
   data = { ...DEFAULTS, ...data };
   for (const el of $('form').elements) {
     if (!el.name || !(el.name in data)) continue;
@@ -381,7 +385,6 @@ function loadForm() {
   }
 }
 function syncForm() {
-  $('privacyWrap').classList.toggle('hidden', !$('upload').checked);
   $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
   $('avatar_style').disabled = $('avatar_source').value !== 'comfyui';
 }

@@ -343,6 +343,10 @@ class AvatarGenerator:
             for key in SEED_INPUTS:
                 if isinstance(node.get("inputs", {}).get(key), int):
                     node["inputs"][key] = random.randint(0, 2**32 - 1)
+            # Keeps our clips out of ComfyUI's output folder: they go to its temp
+            # folder, which it clears itself, and are downloaded from there below.
+            if "save_output" in node.get("inputs", {}):
+                node["inputs"]["save_output"] = False
 
         response = requests.post(f"{self.url}/prompt", json={"prompt": workflow, "client_id": self.client_id}, timeout=30)
         if response.status_code != 200:

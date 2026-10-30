@@ -127,6 +127,7 @@ The presenter is **lip-synced** to the narration: each scene's voiceover is fed 
 - `comfyui/avatar_lipsync.json` (default) is the workflow in API format (ComfyUI → Workflow → **Export (API)**): LTX-2.3 I2V/T2V plus three nodes that load the narration, encode it, and mask it so the audio is kept and only the video is generated.
 - `comfyui/avatar_workflow.json` is the same workflow without lip-sync: the presenter reacts silently while the narration plays over her. Point `COMFYUI_WORKFLOW` at it to use it.
 - Each `.map.json` says which node inputs to fill, as `"<node id>.<input>"`: `prompt` (required), `image`, `audio` (turns on lip-sync), `text_to_video`, `seconds`, `width`, `height`. Seeds are randomised automatically. If you swap in another workflow, update the map to match.
+- Clips stay out of ComfyUI's `output` folder: any `save_output` input is switched off when a clip is queued, so ComfyUI saves it to its `temp` folder (which it wipes on every start) and the pipeline downloads it from there. Nothing is ever deleted from `output`, and renders you start in ComfyUI yourself save as usual. A swapped-in workflow must use a save node with `save_output`, such as Video Combine.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -210,7 +211,7 @@ style, YouTube upload and privacy, advanced flags) with a hint under each, a
 "Check setup" button, a live log, ComfyUI status, recent API errors, and a
 carousel of the videos in `0_output` (Ready) and `1_uploaded` (Uploaded). Each
 ready video has **Upload** and **Delete**; **Upload all** sends every ready video
-(uploads use the privacy picked under Publish). On a desktop at least 1280px
+(uploads use the privacy picked under Publish, public by default). On a desktop at least 1280px
 wide the options, the run card (Generate, ComfyUI, progress, log) and the
 portrait videos sit in three columns on one screen.
 
