@@ -21,6 +21,7 @@
   .log .empty-log { color: var(--muted); }
   .estimate { margin-top: 12px; font-size: .9rem; }
   .estimate .err { margin: 0; }
+  .eta-detail .changes { max-height: 7.5em; overflow-y: auto; margin-top: 2px; }
   #uploadBox .status { margin-bottom: 8px; }
   #uploadBox .log { max-height: 130px; margin-bottom: 12px; }
   #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
@@ -358,6 +359,7 @@
     <span class="dot" id="dot"></span>
     <span id="statusText">Idle</span>
   </div>
+  <div class="hint eta-detail" id="etaDetail" hidden></div>
   <div id="now" class="hidden">
     <div class="stepper" id="stepper"></div>
     <div class="now-line"><b id="stageName"></b><span class="time" id="stageTime"></span></div>
@@ -643,6 +645,22 @@ function clockIn(sec) {
 function totalEta(eta) {
   return `${fmtEta(eta.total_left)} left, done around ${clockIn(eta.total_left)}`;
 }
+// What moved the ETA, with its effect: '+6 min', or nothing for a change that costs no time.
+function etaChange(change) {
+  const sign = change.seconds > 0 ? '+' : '-';
+  const effect = change.seconds ? `${sign}${fmtEta(Math.abs(change.seconds)).slice(1)} · ` : '';
+  return `<div>${effect}${esc(change.text)}</div>`;
+}
+function renderEtaDetail(eta) {
+  const box = $('etaDetail');
+  box.hidden = !eta;
+  if (!eta) return;
+  const original = `Original ETA: <b>${fmtEta(eta.original_total)}</b>, done around ${clockIn(eta.original_left)}`;
+  box.innerHTML = eta.changes.length
+    ? `${original}<br>Adjusted ETA: <b>${fmtEta(eta.adjusted_total)}</b>, done around ${clockIn(eta.total_left)}`
+      + `<div class="changes">${eta.changes.map(etaChange).join('')}</div>`
+    : `${original} · on track`;
+}
 
 // --- Estimate before a run, from the form's current options ---
 let plan = null, planRequest = 0, planTimer = 0;
@@ -800,6 +818,7 @@ async function poll() {
   $('go').hidden = running;
 
   renderNow(data);
+  renderEtaDetail(running ? (data.progress || {}).eta : null);
 
   if (running) {
     const p = data.progress || {};

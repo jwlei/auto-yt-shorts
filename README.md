@@ -231,9 +231,11 @@ portrait videos sit in three columns on one screen.
 Before a run, the panel estimates how long it will take from the options you have
 set, and updates as you change them: videos, avatar layout and source, clips per
 video, clip length and uploading. During a run it shows an ETA for each step and for
-the whole run, including any videos still to come. Finished steps are timed and saved to
-`logs/stage_timings.json`, so the estimates start rough and get better with each run.
-Delete that file to start over.
+the whole run, including any videos still to come. It keeps the original ETA from the
+start of the run next to an adjusted one, and lists what moved it: a clip that failed its
+check and renders again, more or fewer clips than expected, or steps running slower or
+faster than estimated. Finished steps are timed and saved to `logs/stage_timings.json`, so
+the estimates start rough and get better with each run. Delete that file to start over.
 
 The left column lists today's quota per model: Gemini text and voice models, the stock
 provider and YouTube upload units. Google has no API for what is left of a quota, so

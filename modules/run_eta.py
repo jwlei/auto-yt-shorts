@@ -25,6 +25,8 @@ LEARNING_RATE = 0.3
 TYPICAL_SCENE_SECONDS = 5.5
 # A clip renders this much longer than she is on screen: rounded up, plus the overlap into the next scene.
 CLIP_EXTRA_SECONDS = 1
+# Unexplained drift from the original estimate below this isn't worth a line in the panel.
+SMALL_DRIFT_SECONDS = 60
 
 
 def _load_timings(path):
@@ -77,6 +79,13 @@ class RunEta:
         self.finished = {}
         self._reset_video()
 
+        self.video_number = 1
+        self.video_total = self.videos_left + 1
+        self.changes = []
+        self.started = time.time()
+        # Stays as it was at the start, however the run goes, to compare the live ETA with.
+        self.original_total = self.plan()["total"]
+
     def _reset_video(self):
         self.scene_count = None
         self.scenes_started = 0
@@ -89,6 +98,7 @@ class RunEta:
     # --- What the run reports ---
 
     def video(self, number, total):
+        self.video_number, self.video_total = number, total
         self.videos_left = total - number
 
     def scenes(self, count):
@@ -106,16 +116,25 @@ class RunEta:
     def clip(self, number, total, seconds):
         now = time.time()
         self._finish_attempt(now)
+        if self.clip_count is None:
+            self._note_clip_count(total)
         self.clip_number, self.clip_count = number, total
         self.first_clip_at = self.first_clip_at or now
         self.attempt_started = now
         self.attempt_seconds = seconds
 
-    def clip_rejected(self, attempt, attempts):
+    def clip_rejected(self, attempt, attempts, problem):
         """The lip-sync check failed: another render starts now, unless that was the last try."""
         now = time.time()
         self._finish_attempt(now)
-        self.attempt_started = now if attempt < attempts else None
+        clip = f"Clip {self.clip_number} of {self.clip_count}"
+        problem = problem.split(",")[0]  # The measurement after the comma only means something in the log
+        if attempt < attempts:
+            self.attempt_started = now
+            self._note(f"{clip} rejected ({problem}), rendering it again", self._render_seconds(self.attempt_seconds))
+        else:
+            self.attempt_started = None
+            self._note(f"{clip} rejected on all {attempts} tries ({problem}), using stock footage", 0)
 
     def scene(self):
         self.scenes_started += 1
@@ -124,6 +143,27 @@ class RunEta:
         """The whole run succeeded, so the step it ended on did finish."""
         if self.number and self.number == self.total:
             self._finish_stage()
+
+    # --- Why the ETA moved ---
+
+    def _note(self, text, seconds):
+        video = f"Video {self.video_number}: " if self.video_total > 1 else ""
+        self.changes.append({"text": video + text, "seconds": round(seconds)})
+
+    def _note_clip_count(self, total):
+        planned = self._planned_clip_count()
+        if round(planned) != total:
+            self._note(f"{total} avatar {'clip' if total == 1 else 'clips'} instead of the {round(planned)} expected",
+                       (total - planned) * self._render_seconds(self.planned_clip_seconds))
+
+    def _all_changes(self, adjusted):
+        """The noted changes, plus whatever they don't explain, so they add up to the adjusted ETA."""
+        changes = list(self.changes)
+        drift = adjusted - self.original_total - sum(change["seconds"] for change in changes)
+        if abs(drift) >= SMALL_DRIFT_SECONDS:
+            pace = "slower" if drift > 0 else "faster"
+            changes.append({"text": f"Running {pace} than estimated", "seconds": round(drift)})
+        return changes
 
     # --- Learning ---
 
@@ -222,4 +262,9 @@ class RunEta:
                 steps.append({"state": "next", "seconds": round(seconds)})
 
         video = sum(self._stage_seconds(name, clips, self.timings["scenes"]) for name in names)
-        return {"steps": steps, "total_left": round(left + self.videos_left * video)}
+        total_left = left + self.videos_left * video
+        elapsed = now - self.started
+        adjusted = elapsed + total_left
+        return {"steps": steps, "total_left": round(total_left),
+                "original_total": self.original_total, "original_left": round(self.original_total - elapsed),
+                "adjusted_total": round(adjusted), "changes": self._all_changes(adjusted)}

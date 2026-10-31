@@ -166,7 +166,7 @@ class Job:
         ("stage", re.compile(r"\u25b6 Stage (\d+)/(\d+): (.+)")),
         ("scenes", re.compile(r"narration for (\d+) scenes|Generation for (\d+) scenes")),
         ("clip", re.compile(r"Clip (\d+)/(\d+) \u00b7 scene (\d+): (\d+)s ([\w-]+)")),
-        ("rejected", re.compile(r"Rejected: .*\(attempt (\d+)/(\d+)\)")),
+        ("rejected", re.compile(r"Rejected: (.*) \(attempt (\d+)/(\d+)\)")),
         ("render", re.compile(r"Processing Scene (\d+)")),
     ]
 
@@ -191,7 +191,7 @@ class Job:
                 p["detail"] = f"Clip {m.group(1)} of {m.group(2)} - scene {m.group(3)}, {m.group(4)}s {m.group(5)}"
                 self.eta.clip(int(m.group(1)), int(m.group(2)), int(m.group(4)))
             elif kind == "rejected":
-                self.eta.clip_rejected(int(m.group(1)), int(m.group(2)))
+                self.eta.clip_rejected(int(m.group(2)), int(m.group(3)), m.group(1))
             elif kind == "render":
                 total = p.get("scenes")
                 p["detail"] = f"Scene {m.group(1)}" + (f" of {total}" if total else "")
