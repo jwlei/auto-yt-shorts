@@ -9,7 +9,8 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from modules.api_log import log_api_call, log_api_error
-from modules.paths import move_to_uploaded, thumbnail_path
+from modules.paths import move_to_uploaded
+from modules.thumbnail import find_avatar_still, make_thumbnail
 
 # Uploading is the only scope this needs (it covers setting a thumbnail too).
 # Keeping it narrow means the consent screen cannot hand out read/write access
@@ -17,32 +18,6 @@ from modules.paths import move_to_uploaded, thumbnail_path
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-
-# YouTube refuses thumbnails over this size.
-THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024
-# One frame per second is considered, for up to this many seconds. Each frame
-# considered is held in memory.
-THUMBNAIL_SAMPLES = 60
-
-
-def make_thumbnail(video_path):
-    """
-    Saves a still from the video beside it and returns its path. ffmpeg's thumbnail
-    filter picks the frame most typical of those it looks at, which passes over
-    black frames and most of a transition. Returns None if no quality fits the limit.
-    """
-    path = thumbnail_path(video_path)
-    for quality in (2, 5, 10):  # JPEG scale: lower is better
-        (
-            ffmpeg.input(video_path)
-            .filter('fps', fps=1)
-            .filter('thumbnail', n=THUMBNAIL_SAMPLES)
-            .output(path, vframes=1, **{'q:v': quality})
-            .run(overwrite_output=True, quiet=True)
-        )
-        if os.path.getsize(path) <= THUMBNAIL_MAX_BYTES:
-            return path
-    return None
 
 
 class YouTubeUploader:
@@ -173,15 +148,18 @@ class YouTubeUploader:
         return True
 
 
-def _upload_thumbnail(uploader, video_path, url):
+def _upload_thumbnail(uploader, video_path, url, still, topic, metadata, brain):
     """A thumbnail is a bonus: failing to make one must not count against the finished upload."""
+    if not still:
+        print("   ⚠️ No thumbnail: there is no image of the avatar to make it from.")
+        return
     try:
-        image_path = make_thumbnail(video_path)
+        image_path = make_thumbnail(still, video_path, topic, metadata, brain)
     except (ffmpeg.Error, OSError) as e:
         print(f"   ⚠️ Could not make a thumbnail: {e}")
         return
     if not image_path:
-        print("   ⚠️ No thumbnail: the still stayed over YouTube's 2 MB limit.")
+        print("   ⚠️ No thumbnail: it stayed over YouTube's 2 MB limit.")
         return
     uploader.set_thumbnail(url.rsplit("/", 1)[-1], image_path)
 
@@ -190,7 +168,7 @@ def publish_video(video_path, topic, narration, privacy_status, brain):
     """
     Has Gemini write the title, description and tags, uploads the video, moves it
     to 1_uploaded (0_output only holds videos still waiting to go up), and sets a
-    still from it as the thumbnail, kept beside the video.
+    thumbnail built from a still of the avatar, kept beside the video.
     Returns (path, url): the url is None and the path unchanged if it failed.
     """
     metadata = brain.generate_metadata(topic, narration)
@@ -203,6 +181,10 @@ def publish_video(video_path, topic, narration, privacy_status, brain):
         privacy_status=privacy_status,
     )
     if url:
+        still = find_avatar_still(video_path)
         video_path = move_to_uploaded(video_path)
-        _upload_thumbnail(uploader, video_path, url)
+        _upload_thumbnail(uploader, video_path, url, still, topic, metadata, brain)
+        # Only made for this: the thumbnail is kept instead.
+        if still and os.path.exists(still):
+            os.remove(still)
     return video_path, url

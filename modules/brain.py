@@ -4,10 +4,11 @@ import re
 import threading
 import time
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 from modules.api_log import is_daily_quota, log_api_call, log_api_error
-from modules.gemini_models import get_fast_models, get_text_models
+from modules.gemini_models import get_fast_models, get_image_models, get_text_models
 
 load_dotenv()
 
@@ -105,7 +106,7 @@ def _call_with_deadline(fn, seconds):
     return result["value"]
 
 
-def _generate(prompt, retries=4, models=None):
+def _generate(prompt, retries=4, models=None, config=None):
     """
     Calls Gemini, waiting out the overload and per-minute rate limits that a
     scheduled run hits regularly. A model whose daily quota is used up, that
@@ -123,7 +124,7 @@ def _generate(prompt, retries=4, models=None):
         for attempt in range(retries):
             try:
                 response = _call_with_deadline(
-                    lambda: client.models.generate_content(model=model, contents=prompt), timeout)
+                    lambda: client.models.generate_content(model=model, contents=prompt, config=config), timeout)
                 log_api_call("Gemini", model)
                 return response
             except Exception as e:
@@ -329,15 +330,21 @@ class ContentBrain:
       A viewer searching one of them should expect this video. No spaces inside a hashtag. No generic reach
       hashtags such as #viral, #fyp, #foryou or #trending. Do not include #Shorts: it is added automatically.
     - "tags": 8-12 lowercase search keywords, no "#" prefix.
+    - "thumbnail_text": 2-4 words that create curiosity and are true to the video. Do not repeat the title.
+    - "thumbnail_scene": one sentence describing a single striking object or setting from the story,
+      recognisable at phone size even when soft and behind a person. Show no real people, logos or gore.
 
     Return ONLY strict JSON:
-    {{"title": "...", "description": "...", "hashtags": ["#...", "#..."], "tags": ["...", "..."]}}
+    {{"title": "...", "description": "...", "hashtags": ["#...", "#..."], "tags": ["...", "..."],
+    "thumbnail_text": "...", "thumbnail_scene": "..."}}
     """
 
         fallback = {
             "title": topic[:80],
             "description": f"{topic}\n\n#Shorts",
             "tags": [],
+            "thumbnail_text": "",
+            "thumbnail_scene": "",
         }
 
         try:
@@ -369,7 +376,63 @@ class ContentBrain:
             "title": str(metadata['title']).strip(),
             "description": description,
             "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
+            "thumbnail_text": str(metadata.get('thumbnail_text') or "").strip(),
+            "thumbnail_scene": str(metadata.get('thumbnail_scene') or "").strip(),
         }
+
+    def generate_thumbnail(self, still_path, topic, metadata):
+        """
+        Has an image model build the thumbnail from a still of the presenter, with her
+        face as the focus. Returns the image's bytes, or None if no model made one: the
+        caller decides what to use instead.
+        """
+        scene = metadata.get("thumbnail_scene") or f"a striking image of what this video is about: {topic}"
+        text = metadata.get("thumbnail_text")
+        wording = (f'- In the space above her head, add this exact text in bold, high-contrast letters: "{text}". '
+                   "Make it smaller than her face and add no other text.") if text else "- Add no text."
+        prompt = f"""
+    Generate a fitting vertical 9:16 YouTube Shorts thumbnail for "{metadata['title']}".
+    The video is about: {topic}.
+
+    The attached image is a still of the channel's presenter. Use this exact woman:
+    keep her face, eye colour, glasses, hair, earrings and clothes unchanged.
+
+    Her face is the focus of the thumbnail and must always be fully visible:
+    - Show her from the shoulders up, with her face in the middle of the frame and
+      taking up about half of the frame height.
+    - Her face is the sharpest, best-lit part of the image, and she looks straight
+      into the camera.
+    - Nothing covers any part of her face or glasses: no text, objects, hands or hair.
+    - If anything competes with her face, make that element smaller or softer.
+
+    Supporting elements:
+    - Behind her, slightly out of focus and darker than her face: {scene}.
+    {wording}
+    - Keep the bottom 20% and right edge free of text and important detail, because
+      YouTube's buttons cover them.
+
+    Style: photorealistic and sharp, with cinematic light and one strong accent colour.
+
+    Her expression: calm, curious and relaxed, with a slight closed-mouth smile. If her
+    mouth is open in the still, close it. Her eyes stay relaxed, never wide or shocked.
+
+    Do not add other people, real people's likenesses, logos, watermarks, arrows,
+    emoji, borders or gore.
+    """
+        config = types.GenerateContentConfig(response_modalities=["IMAGE"],
+                                             image_config=types.ImageConfig(aspect_ratio="9:16"))
+        try:
+            with open(still_path, "rb") as f:
+                still = types.Part.from_bytes(data=f.read(), mime_type="image/jpeg")
+            response = _generate([still, prompt], retries=2, models=get_image_models(), config=config)
+        except Exception as e:
+            print(f"   ⚠️ Thumbnail generation failed ({e}).")
+            return None
+        for part in response.parts or []:
+            if part.inline_data and part.inline_data.data:
+                return part.inline_data.data
+        print("   ⚠️ The image model answered without an image.")
+        return None
 
     def write_avatar_prompt(self, scene, seconds, speaking=False, camera="slow push-in towards her face",
                             gesture="gestures with both open hands"):

@@ -397,9 +397,18 @@ python main.py --runs 3 --upload             # batch, each one uploaded
 - **Quota.** An upload costs 1600 units and its thumbnail 50, against a default
   daily quota of 10,000, so roughly **6 uploads per day** before the API starts
   refusing.
-- **Thumbnails need a verified channel.** Each upload sets a still from the video
-  as its thumbnail. Without [phone verification](https://www.youtube.com/verify)
-  YouTube refuses it with a 403; the video stays up and the log says so.
+- **Thumbnails always show the avatar.** A run saves the frame of its accepted avatar
+  clips that best faces the camera, or a crop of the reference image if it has none, as
+  `<video>.still.jpg`. On upload a Gemini image model (`GEMINI_IMAGE_MODEL`, default
+  `gemini-3.1-flash-image,gemini-2.5-flash-image`) builds the thumbnail from it, with her
+  face as the focus and a scene and short text from the video behind and above her. An
+  image where her face can't be seen or is too small is tried once more. If Gemini can't
+  make one, the still itself is used. With no avatar image at all, no thumbnail is set.
+  Google gives its image models no free-tier quota, so the Gemini step needs billing on
+  the API key; without it every thumbnail is the plain still.
+- **Thumbnails need a verified channel.** Without
+  [phone verification](https://www.youtube.com/verify) YouTube refuses them with a 403;
+  the video stays up and the log says so.
 - Every successful upload moves the MP4 from `0_output/` to `1_uploaded/`, so
   `0_output/` only ever holds videos still waiting to go up.
 - A failed upload never discards the video — the MP4 stays in `0_output/`

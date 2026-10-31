@@ -13,6 +13,7 @@ from modules.audio import AudioEngine, get_tts_provider
 from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
                                       get_avatar_source, pick_on_screen, plan_avatar_scenes)
 from modules.composer import Composer
+from modules.thumbnail import save_avatar_still
 from modules.topic_history import find_exact_repeat, read_successful_topics, record_successful_topic
 
 load_dotenv()
@@ -280,6 +281,14 @@ async def generate_one(args):
     final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
 
     narration = " ".join(scene['text'] for scene in script)
+
+    # The clips are gone by the time a video waiting in 0_output gets uploaded.
+    if final_path:
+        shown = [(avatar_clips[i], script[i]['avatar_seconds']) for i in indices if i in avatar_clips]
+        try:
+            save_avatar_still(final_path, shown, generator.reference_image if generator else None)
+        except Exception as e:
+            print(f"   ⚠️ Could not save a still of the avatar: {e}")
 
     # 6. PUBLISH (optional)
     if final_path and args.upload:

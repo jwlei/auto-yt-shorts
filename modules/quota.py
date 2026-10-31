@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from modules.api_log import LOG_PATH, USAGE_PATH, is_daily_quota
 from modules.asset_manager import get_provider
-from modules.gemini_models import get_fast_models, get_text_models, get_tts_models
+from modules.gemini_models import get_fast_models, get_image_models, get_text_models, get_tts_models
 
 # Google's daily quotas roll over at midnight Pacific, whatever the local time is.
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -115,6 +115,7 @@ def quota_summary():
         "groups": [
             {"title": "Gemini text", "rows": [gemini_row(m) for m in text_models]},
             {"title": "Gemini voice", "rows": [gemini_row(m) for m in get_tts_models()]},
+            {"title": "Gemini images", "rows": [gemini_row(m) for m in get_image_models()]},
             {"title": "Stock footage", "rows": [_stock_row(reported, time.time())]},
             {"title": "YouTube", "rows": [_row("Upload units",
                                                calls[YOUTUBE_UPLOADS] * YOUTUBE_UPLOAD_COST

@@ -14,6 +14,11 @@ def thumbnail_path(video_path):
     return os.path.splitext(video_path)[0] + ".jpg"
 
 
+def avatar_still_path(video_path):
+    """Where a video waiting for upload keeps the still of the avatar its thumbnail is made from."""
+    return os.path.splitext(video_path)[0] + ".still.jpg"
+
+
 def move_to_uploaded(video_path):
     """Moves an uploaded video into UPLOADED_DIR. Returns the new path (or the old one if the move failed)."""
     os.makedirs(UPLOADED_DIR, exist_ok=True)

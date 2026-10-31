@@ -14,6 +14,10 @@ DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-3.5-flash")
 # Override with GEMINI_TTS_MODEL (one model or a comma-separated chain).
 DEFAULT_TTS_MODELS = ("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts")
 
+# Tried in order, for thumbnails. Override with GEMINI_IMAGE_MODEL (one model or a
+# comma-separated chain).
+DEFAULT_IMAGE_MODELS = ("gemini-3.1-flash-image", "gemini-2.5-flash-image")
+
 
 def _get_models(env_var, defaults):
     # An unset CI variable arrives as an empty string, not as None.
@@ -33,3 +37,7 @@ def get_fast_models():
 
 def get_tts_models():
     return _get_models("GEMINI_TTS_MODEL", DEFAULT_TTS_MODELS)
+
+
+def get_image_models():
+    return _get_models("GEMINI_IMAGE_MODEL", DEFAULT_IMAGE_MODELS)

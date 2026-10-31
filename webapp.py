@@ -37,7 +37,7 @@ from flask import (Flask, abort, redirect, render_template, request,
 
 from modules.api_log import summarize_api_error
 from modules.avatar_generator import avatar_clip_range, on_screen_range
-from modules.paths import OUTPUT_DIR, UPLOADED_DIR, thumbnail_path
+from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
 from modules.topic_history import read_history
@@ -839,8 +839,9 @@ def publish():
 def delete(folder, name):
     path = safe_video_path(folder, name)
     os.remove(path)
-    if os.path.exists(thumbnail_path(path)):
-        os.remove(thumbnail_path(path))
+    for companion in (thumbnail_path(path), avatar_still_path(path)):
+        if os.path.exists(companion):
+            os.remove(companion)
     return {"ok": True}
 
 

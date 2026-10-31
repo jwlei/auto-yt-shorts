@@ -14,12 +14,23 @@ MODEL_PATH = os.path.join("assets", "models", "face_landmarker.task")
 # Face mesh points: inner upper and lower lip, and between the eyes to the chin.
 UPPER_LIP, LOWER_LIP = 13, 14
 BETWEEN_EYES, CHIN = 168, 152
+# Top of the forehead, the tip of the nose, the two sides of the face and the outer eye corners.
+FOREHEAD, NOSE_TIP, FACE_LEFT, FACE_RIGHT, EYE_LEFT, EYE_RIGHT = 10, 1, 234, 454, 33, 263
 # Centre and edge of each iris.
 IRISES = ((468, 469), (473, 474))
 # Part of the iris radius sampled for its colour: outside the pupil, inside the rim.
 IRIS_RING = (0.45, 0.8)
 # An iris smaller than this many pixels has no colour worth reading.
 MIN_IRIS_RADIUS = 3
+# How many frames of each second of a clip are considered for the thumbnail's still.
+STILL_FRAMES_PER_SECOND = 2
+# Blink score above which a frame can't be the still.
+MAX_STILL_BLINK = 0.4
+# A still crops to this many face heights, with the face's middle this far down it.
+STILL_FACE_HEIGHTS = 3.2
+STILL_FACE_LINE = 0.35
+# The detector misses a face that is small in a wide image, so it also looks at this many squares of it.
+FACE_SEARCH_SQUARES = 5
 
 
 def _model_path():
@@ -58,17 +69,126 @@ def _iris_color(frame, points):
     return np.median(lab, axis=0)
 
 
+def _image_landmarker():
+    options = vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=_model_path()),
+                                           running_mode=vision.RunningMode.IMAGE, num_faces=1,
+                                           output_face_blendshapes=True)
+    return vision.FaceLandmarker.create_from_options(options)
+
+
+def _detect(landmarker, frame):
+    return landmarker.detect(mediapipe.Image(image_format=mediapipe.ImageFormat.SRGB,
+                                             data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+
+
 def eye_color(image_path):
     """The iris colour in an image, or None if no face or iris can be read in it."""
-    options = vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=_model_path()),
-                                           running_mode=vision.RunningMode.IMAGE, num_faces=1)
     frame = cv2.imread(image_path)
     if frame is None:
         return None
-    with vision.FaceLandmarker.create_from_options(options) as landmarker:
-        faces = landmarker.detect(mediapipe.Image(image_format=mediapipe.ImageFormat.SRGB,
-                                                  data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))).face_landmarks
+    with _image_landmarker() as landmarker:
+        faces = _detect(landmarker, frame).face_landmarks
     return _iris_color(frame, faces[0]) if faces else None
+
+
+def _still_fault(result, frame):
+    """
+    How far a frame is from a good still of her, where 0 is a level face turned straight
+    to the camera, mouth shut and eyes relaxed. None if it can't be one: no face, part of
+    her face out of frame, or her eyes closing.
+    """
+    if not result.face_landmarks:
+        return None
+    points = result.face_landmarks[0]
+    if not all(0 <= point.x <= 1 and 0 <= point.y <= 1 for point in points):
+        return None
+    scores = {shape.category_name: shape.score for shape in result.face_blendshapes[0]}
+    if (scores["eyeBlinkLeft"] + scores["eyeBlinkRight"]) / 2 > MAX_STILL_BLINK:
+        return None
+    height, width = frame.shape[:2]
+    # The nose sits halfway between the sides of a face turned straight to the camera.
+    turned = abs((points[NOSE_TIP].x - points[FACE_LEFT].x)
+                 / max(points[FACE_RIGHT].x - points[FACE_LEFT].x, 1e-6) - 0.5) * 2
+    tilted = abs(np.degrees(np.arctan2((points[EYE_RIGHT].y - points[EYE_LEFT].y) * height,
+                                       (points[EYE_RIGHT].x - points[EYE_LEFT].x) * width))) / 45
+    wide = (scores["eyeWideLeft"] + scores["eyeWideRight"]) / 2
+    return 2 * turned + 2 * tilted + scores["jawOpen"] + wide
+
+
+def best_face_frame(clips, path):
+    """
+    Saves the frame that makes the best still of her from the shown part of each clip.
+    clips: [(clip path, seconds shown)]. Returns False if no frame could be one.
+    """
+    best, best_fault = None, None
+    with _image_landmarker() as landmarker:
+        for clip, seconds in clips:
+            capture = cv2.VideoCapture(clip)
+            fps = capture.get(cv2.CAP_PROP_FPS) or 24
+            step = max(round(fps / STILL_FRAMES_PER_SECOND), 1)
+            try:
+                for number in range(int(seconds * fps)):
+                    ok, frame = capture.read()
+                    if not ok:
+                        break
+                    if number % step:
+                        continue
+                    fault = _still_fault(_detect(landmarker, frame), frame)
+                    if fault is not None and (best_fault is None or fault < best_fault):
+                        best, best_fault = frame, fault
+            finally:
+                capture.release()
+    return best is not None and cv2.imwrite(path, best, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+
+def _locate_face(landmarker, frame):
+    """Where a face is in the frame, in pixels: (top of forehead, chin, nose's x), or None."""
+    height, width = frame.shape[:2]
+    faces = _detect(landmarker, frame).face_landmarks
+    if faces:
+        points = faces[0]
+        return points[FOREHEAD].y * height, points[CHIN].y * height, points[NOSE_TIP].x * width
+
+    # The square with the face nearest its middle, as one that cuts the face off reads it badly.
+    found, off_centre = None, None
+    for left in np.linspace(0, max(width - height, 0), FACE_SEARCH_SQUARES).astype(int):
+        faces = _detect(landmarker, frame[:, left:left + height]).face_landmarks
+        if faces:
+            points = faces[0]
+            distance = abs(points[NOSE_TIP].x - 0.5)
+            if off_centre is None or distance < off_centre:
+                off_centre = distance
+                found = points[FOREHEAD].y * height, points[CHIN].y * height, left + points[NOSE_TIP].x * height
+    return found
+
+
+def crop_to_face(image_path, path):
+    """Saves a 9:16 crop around the face in an image, for a wide reference image. Returns False without a face."""
+    frame = cv2.imread(image_path)
+    if frame is None:
+        return False
+    with _image_landmarker() as landmarker:
+        face = _locate_face(landmarker, frame)
+    if not face:
+        return False
+    top_of_face, chin, nose_x = face
+    height, width = frame.shape[:2]
+    crop_height = min(int((chin - top_of_face) * STILL_FACE_HEIGHTS), height)
+    crop_width = min(crop_height * 9 // 16, width)
+    left = int(nose_x - crop_width / 2)
+    top = int((top_of_face + chin) / 2 - crop_height * STILL_FACE_LINE)
+    left, top = max(min(left, width - crop_width), 0), max(min(top, height - crop_height), 0)
+    return cv2.imwrite(path, frame[top:top + crop_height, left:left + crop_width], [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+
+def face_share(image_path):
+    """How much of the image's height her face takes up, forehead to chin, or None if no face can be seen."""
+    frame = cv2.imread(image_path)
+    if frame is None:
+        return None
+    with _image_landmarker() as landmarker:
+        faces = _detect(landmarker, frame).face_landmarks
+    return abs(faces[0][CHIN].y - faces[0][FOREHEAD].y) if faces else None
 
 
 def _windows(values, size):
