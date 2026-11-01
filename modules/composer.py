@@ -10,8 +10,8 @@ from modules.paths import OUTPUT_DIR
 TRANSITION = 0.5
 
 class Composer:
-    def __init__(self):
-        self.temp_dir = os.path.join(os.getcwd(), "assets", "temp")
+    def __init__(self, temp_dir=None):
+        self.temp_dir = temp_dir or os.path.join(os.getcwd(), "assets", "temp")
         self.final_dir = OUTPUT_DIR
         self.avatar_path = os.path.join(os.getcwd(), "assets", "avatar", "avatars.mp4")
         

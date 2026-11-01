@@ -130,7 +130,7 @@ def _pick_boundaries(mids, weights, expected):
 
 
 class AudioEngine:
-    def __init__(self, voice=None, lang="en-GB"):
+    def __init__(self, voice=None, lang="en-GB", output_dir=None):
         self.provider = get_tts_provider()
         # edge-tts voice names end in 'Neural'; anything else is a Gemini voice.
         # A voice meant for the other engine is ignored, so --voice never breaks either one.
@@ -144,7 +144,7 @@ class AudioEngine:
         self.timeout = int(os.getenv("GEMINI_TTS_TIMEOUT") or DEFAULT_GEMINI_TTS_TIMEOUT)
         self.min_interval = 60.0 / max(1, int(os.getenv("GEMINI_TTS_RPM") or DEFAULT_GEMINI_TTS_RPM))
         self.last_request = {}
-        self.output_dir = os.path.join(os.getcwd(), "assets", "audio_clips")
+        self.output_dir = output_dir or os.path.join(os.getcwd(), "assets", "audio_clips")
         os.makedirs(self.output_dir, exist_ok=True)
 
     # --- Gemini TTS ---

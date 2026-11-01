@@ -217,7 +217,7 @@ class AvatarGenerator:
     turns on lip-sync: each clip is generated to match its scene's narration.
     """
 
-    def __init__(self):
+    def __init__(self, clips_dir=None):
         load_dotenv()
         self.url = (os.getenv("COMFYUI_URL") or DEFAULT_COMFYUI_URL).rstrip("/")
         self.workflow_path = os.getenv("COMFYUI_WORKFLOW") or os.path.join(os.getcwd(), DEFAULT_WORKFLOW)
@@ -244,7 +244,7 @@ class AvatarGenerator:
             print("⚠️ AVATAR_REFERENCE_IMAGE is set but the workflow map has no 'image' field — ignoring it.")
             self.reference_image = None
 
-        self.clips_dir = os.path.join(os.getcwd(), "assets", "video_clips")
+        self.clips_dir = clips_dir or os.path.join(os.getcwd(), "assets", "video_clips")
         os.makedirs(self.clips_dir, exist_ok=True)
         # Fixed, so the web UI can listen on ComfyUI's websocket for this run's
         # progress (ComfyUI only sends progress to the client that queued the job).
@@ -306,7 +306,7 @@ class AvatarGenerator:
 
     # --- Pipeline entry point ---
 
-    def generate(self, script_data, indices, brain):
+    def generate(self, script_data, indices, brain, kept=None, on_clip=None):
         """
         Renders one clip for each scene index. Returns {index: clip path} for the
         clips that succeeded; the caller decides what to show for the rest.
@@ -314,11 +314,14 @@ class AvatarGenerator:
         With AVATAR_REFERENCE_IMAGE every clip is image-to-video from it. Without
         one, the first clip is text-to-video from AVATAR_PERSONA and a frame of it
         becomes the reference for the rest, so the same person appears throughout.
+
+        `kept` holds clips accepted earlier, which aren't rendered again. on_clip is
+        told about each new clip as soon as it is accepted, so it survives a Stop.
         """
         print(f"🧑 Generating {len(indices)} avatar clip(s) with ComfyUI ({self.url})"
               f"{', lip-synced' if self.lipsync else ''}"
               f"{', persona ' + os.path.basename(self.reference_image) if self.reference_image else ''}...")
-        clips = {}
+        clips = dict(kept or {})
         reference = None
         self.expected_eye_color = None
 
@@ -333,6 +336,15 @@ class AvatarGenerator:
         for number, i in enumerate(indices, 1):
             scene = script_data[i]
             on_screen = scene.get('avatar_seconds') or scene.get('duration', self.max_seconds)
+            if i in clips:
+                print(f"   ♻️ Clip {number} of {len(indices)} · scene {scene['id']} kept from earlier.")
+                if not self.reference_image:
+                    # What a reference image would otherwise give the clips still to come.
+                    if self.lipsync and self.expected_eye_color is None:
+                        self._clip_problem(clips[i], on_screen)
+                    if reference is None and "image" in self.fields:
+                        reference = self._reference_from_clip(clips[i], scene)
+                continue
             needed = math.ceil(on_screen + 0.5)
             if self.lipsync and on_screen > self.max_seconds:
                 # Looping a lip-synced clip would put the mouth out of step with the voice.
@@ -368,13 +380,19 @@ class AvatarGenerator:
                 continue
 
             clips[i] = clip
+            if on_clip:
+                on_clip(i, clip)
             if reference is None and "image" in self.fields:
-                try:
-                    reference = self._reference_from(clip)
-                except Exception as e:
-                    print(f"   ⚠️ Could not reuse scene {scene['id']} as the persona reference: {e}")
+                reference = self._reference_from_clip(clip, scene)
 
         return clips
+
+    def _reference_from_clip(self, clip, scene):
+        try:
+            return self._reference_from(clip)
+        except Exception as e:
+            print(f"   ⚠️ Could not reuse scene {scene['id']} as the persona reference: {e}")
+            return None
 
     def _render_speaking(self, scene, prompt, reference, seconds, on_screen):
         """

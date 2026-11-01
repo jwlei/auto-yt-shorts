@@ -40,6 +40,7 @@ from modules.avatar_generator import COMFYUI_CLIENT_ID, avatar_clip_range, on_sc
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
+from modules.run_state import RunState, folder_size, list_runs
 from modules.topic_history import read_history
 
 load_dotenv()
@@ -189,6 +190,7 @@ class Job:
     # Lines main.py and its modules print, turned into structured progress.
     PATTERNS = [
         ("run", re.compile(r"===== RUN (\d+)/(\d+) =====")),
+        ("run_id", re.compile(r"Run folder: (run_\w+)")),
         ("stage", re.compile(r"\u25b6 Stage (\d+)/(\d+): (.+)")),
         ("scenes", re.compile(r"narration for (\d+) scenes|Generation for (\d+) scenes")),
         ("clip", re.compile(r"Clip (\d+)/(\d+) \u00b7 scene (\d+): (\d+)s ([\w-]+)")),
@@ -205,6 +207,8 @@ class Job:
             if kind == "run":
                 p["run"] = [int(m.group(1)), int(m.group(2))]
                 self.eta.video(int(m.group(1)), int(m.group(2)))
+            elif kind == "run_id":
+                p["run_id"] = m.group(1)
             elif kind == "stage":
                 p["stage"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
                 p["stage_started"] = time.time()
@@ -279,15 +283,17 @@ class JobQueue:
     The jobs waiting for a Job, oldest first, each keeping the options it was
     queued with. A failed job doesn't stop the ones after it, as in a batch.
     Stop does: pressing it means nothing should start by itself, so what is
-    queued waits for Resume. Kept in memory, like the Job itself.
+    queued waits for Resume. Saved to `path`, so what was waiting comes back after
+    a Shut down or crash, on hold for the same reason.
     """
 
     KEPT_RESULTS = 8
 
-    def __init__(self, job, prepare, blocked=lambda: False):
+    def __init__(self, job, prepare, blocked=lambda: False, path=None):
         self.job = job
         self.prepare = prepare  # Last step before a job starts; returns why it can't run, or None.
         self.blocked = blocked
+        self.path = path
         self.lock = threading.Lock()
         self.items = []
         self.current = None
@@ -295,19 +301,46 @@ class JobQueue:
         self.held = False
         self.next_id = 1
         self.watcher = None
+        self._restore()
+
+    def _restore(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                items = [{**item, "waited": True} for item in json.load(f)]
+            self.next_id = max((item["id"] for item in items), default=0) + 1
+        except (OSError, ValueError, TypeError, KeyError):
+            return  # Nothing saved, or a broken file: an empty queue
+        self.items = items
+        self.held = bool(items)
+
+    def _save(self):
+        # Once closed, the file keeps what was queued at Shut down.
+        if not self.path or self.job.closed:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(self.items, f, ensure_ascii=False)
+            os.replace(self.path + ".tmp", self.path)
+        except OSError as e:
+            self.job.log(f"⚠️ Could not save the queue, it won't survive a restart: {e}")
+
+    def _ensure_watcher(self):
+        # Here and not at import: gunicorn forks after importing, and threads don't survive that.
+        if not self.watcher:
+            self.watcher = threading.Thread(target=self._watch, daemon=True)
+            self.watcher.start()
 
     def add(self, item):
         """Starts the job if nothing is ahead of it, otherwise queues it. Returns True if it is queued."""
         with self.lock:
-            # Here and not at import: gunicorn forks after importing, and threads don't survive that.
-            if not self.watcher:
-                self.watcher = threading.Thread(target=self._watch, daemon=True)
-                self.watcher.start()
+            self._ensure_watcher()
             item["id"] = self.next_id
             self.next_id += 1
             self.items.append(item)
             self._advance()
             item["waited"] = item in self.items
+            self._save()
             return item["waited"]
 
     def _watch(self):
@@ -322,7 +355,9 @@ class JobQueue:
         if not self.items:
             self.held = False
         elif self.job.idle and not self.held and not self.blocked():
-            self._start(self.items.pop(0))
+            item = self.items.pop(0)
+            self._save()
+            self._start(item)
 
     def _finish_current(self):
         item, self.current = self.current, None
@@ -363,6 +398,7 @@ class JobQueue:
 
     def resume(self):
         with self.lock:
+            self._ensure_watcher()
             self.held = False
             self._advance()
 
@@ -372,14 +408,16 @@ class JobQueue:
             removed = len(kept) != len(self.items)
             self.items = kept
             self._advance()
+            self._save()
             return removed
 
     def close(self):
-        """Drops what is waiting and lets nothing start again. The running job is the caller's to stop."""
+        """Lets nothing start again, and leaves what is waiting in the file. The running job is the caller's to stop."""
         with self.lock:
+            self._save()
+            self.job.close()
             self.items = []
             self.held = False
-            self.job.close()
 
     def pending(self):
         """Every job not finished yet, the running one included."""
@@ -748,6 +786,8 @@ def cached_quota():
 
 def prepare_run(item):
     """ComfyUI starts when the run does, not when it is queued: it may not be needed for hours."""
+    if item.get("resume") and not RunState.load(item["resume"]):
+        return "its saved run is gone"
     try:
         if start_comfyui_for_run(item["form"]):
             item["env"]["COMFYUI_STARTUP_WAIT"] = str(COMFYUI_STARTUP_WAIT)
@@ -766,14 +806,60 @@ def prepare_upload(item):
     return None
 
 
-run_queue = JobQueue(job, prepare_run)
+run_queue = JobQueue(job, prepare_run, path=os.path.join(PROJECT_ROOT, "logs", "queue_runs.json"))
 # A run's own upload step is waited out, when its video sits in 0_output with no topic recorded yet.
-upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading)
+upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading,
+                        path=os.path.join(PROJECT_ROOT, "logs", "queue_uploads.json"))
 QUEUES = {"run": run_queue, "upload": upload_queue}
 
 
 def work_left():
     return job.running or uploads.running or run_queue.pending() or upload_queue.pending()
+
+
+def resume_argv(state):
+    return [sys.executable, "main.py", *state.argv, "--resume", state.id]
+
+
+_runs_cache = {"at": 0.0, "value": []}
+
+
+def describe_stopped(state):
+    """A run waiting to be continued, as the panel lists it."""
+    stage = state.next_stage()
+    parts = ["Only the last step is left" if stage == "Upload" else f"Continues at {stage}"]
+    if state.avatar_clips and not state.avatar_done:
+        parts.append(f"{len(state.avatar_clips)} of {len(state.avatar_indices)} avatar clips kept")
+    if state.videos_after:
+        parts.append(f"{state.videos_after} more {'video' if state.videos_after == 1 else 'videos'} after it")
+    try:
+        parts.append(datetime.fromtimestamp(os.path.getmtime(state.path)).strftime("%d %b %H:%M"))
+    except OSError:
+        pass
+    parts.append(f"{folder_size(state.folder) / 2 ** 20:.0f} MB")
+    return {"id": state.id, "label": state.topic or f"Video {state.number}, no topic yet",
+            "detail": " · ".join(parts), "clips": len(state.avatar_clips),
+            "estimate": RunEta(resume_argv(state), state.env, STAGE_TIMINGS).plan()["total"]}
+
+
+def busy_runs():
+    """The saved runs a job has in hand: the one going, and those queued to continue."""
+    busy = {item.get("resume") for item in run_queue.pending()}
+    if job.running:
+        busy.add(job.progress.get("run_id"))
+    return busy
+
+
+def stopped_runs():
+    # Cached briefly: every open browser polls status every 2s.
+    if time.time() - _runs_cache["at"] > 3:
+        _runs_cache["at"] = time.time()
+        try:
+            _runs_cache["value"] = [describe_stopped(state) for state in list_runs()]
+        except Exception as e:  # This is polled for the whole page: one odd run must not freeze it
+            job.log(f"⚠️ Could not list the stopped runs: {e}")
+    busy = busy_runs()
+    return [run for run in _runs_cache["value"] if run["id"] not in busy]
 
 
 def stop_run():
@@ -785,6 +871,7 @@ def stop_run():
     if stopped:
         cancel_pipeline_clips()
         remove_partial_videos()
+        _runs_cache["at"] = 0.0
     return stopped
 
 
@@ -962,6 +1049,50 @@ def generate():
     return {"ok": True, "queued": queued}
 
 
+@app.route("/runs/<run_id>/continue", methods=["POST"])
+@password_required
+def continue_run(run_id):
+    """Starts a stopped run again from where it got to, or queues that behind the run in progress."""
+    state = RunState.load(run_id)
+    if not state:
+        return {"ok": False, "error": "That run is no longer saved."}, 404
+    if run_id in busy_runs():
+        return {"ok": False, "error": "That run is already going or queued."}, 409
+    topic = state.topic or ""
+    argv = resume_argv(state)
+    output = argv[argv.index("--output") + 1] if "--output" in argv else ""
+    for other in run_queue.pending():
+        if topic and other["topic"].lower() == topic.lower():
+            return {"ok": False, "error": "That topic is already running or queued."}, 409
+        if output and other["output"].lower() == output.lower():
+            return {"ok": False, "error": "That file name is already used by a running or queued job."}, 409
+
+    clips = argv[argv.index("--avatar-clips") + 1] if "--avatar-clips" in argv else "auto"
+    item = {"label": topic or f"Video {state.number}", "detail": f"Continues at {state.next_stage()}",
+            "argv": argv, "env": dict(state.env), "topic": topic, "output": output, "resume": run_id,
+            "form": {"avatar_source": state.env.get("AVATAR_SOURCE") or "comfyui", "avatar_clips": clips},
+            "estimate": RunEta(argv, state.env, STAGE_TIMINGS).plan()["total"]}
+    queued = run_queue.add(item)
+    _runs_cache["at"] = 0.0
+    if item.get("error"):
+        return {"ok": False, "error": item["error"]}, 500
+    return {"ok": True, "queued": queued}
+
+
+@app.route("/runs/<run_id>/discard", methods=["POST"])
+@password_required
+def discard_run(run_id):
+    """Deletes a stopped run's script, voice and clips."""
+    state = RunState.load(run_id)
+    if not state:
+        return {"ok": False, "error": "That run is no longer saved."}, 404
+    if run_id in busy_runs():
+        return {"ok": False, "error": "That run is going or queued. Stop it or take it out of the queue first."}, 409
+    state.remove()
+    _runs_cache["at"] = 0.0
+    return {"ok": True}
+
+
 @app.route("/check", methods=["POST"])
 @password_required
 def check():
@@ -1051,6 +1182,7 @@ def launcher_refresh():
 def status():
     payload = job.snapshot()
     payload["queue"] = run_queue.snapshot()
+    payload["stopped_runs"] = stopped_runs()
     payload["upload"] = uploads.snapshot()
     payload["upload"]["queue"] = upload_queue.snapshot()
     payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}

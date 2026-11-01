@@ -4,9 +4,7 @@ import os
 import time
 
 from modules.avatar_generator import DEFAULT_CLIP_RANGE, DEFAULT_ON_SCREEN_RANGE
-
-# Same order as main.py's STAGES, which can't be imported here: it pulls in the whole pipeline.
-STAGES = ("Topic & script", "Voice", "Stock footage", "Avatar clips", "Rendering scenes", "Stitching", "Upload")
+from modules.run_state import STAGES, RunState
 
 # Used until a finished step has been timed. Each stage's value is its own time,
 # except 'Avatar clips' (time before the first clip) and 'Rendering scenes' (unused,
@@ -55,7 +53,8 @@ class RunEta:
     """
     Estimates what is left of a run from how long each step took before. Steps are
     timed as they finish and saved to `path`, so estimates improve with every run.
-    A step cut short by a failure or Stop is never counted.
+    A step cut short by a failure or Stop is never counted. With --resume, only
+    what that run still has to do counts, and steps it finished earlier aren't timed.
     """
 
     def __init__(self, argv, env, path):
@@ -81,12 +80,25 @@ class RunEta:
 
         self.video_number = 1
         self.video_total = self.videos_left + 1
+        state = RunState.load(_option(argv, "--resume", None))
+        if state:
+            self.videos_left = state.videos_after
+            self.video_number, self.video_total = state.number, state.number + state.videos_after
+            self.kept_stages = state.kept_stages()
+            self.kept_clips = len(state.avatar_clips)
+            if state.avatar_indices is not None and self.planned_clips != 0:
+                self.resumed_clips = len(state.avatar_indices)
+            if state.script:
+                self.scene_count = len(state.script)
         self.changes = []
         self.started = time.time()
         # Stays as it was at the start, however the run goes, to compare the live ETA with.
         self.original_total = self.plan()["total"]
 
     def _reset_video(self):
+        self.kept_stages = ()
+        self.kept_clips = 0
+        self.resumed_clips = None
         self.scene_count = None
         self.scenes_started = 0
         self.clip_count = None
@@ -151,7 +163,7 @@ class RunEta:
         self.changes.append({"text": video + text, "seconds": round(seconds)})
 
     def _note_clip_count(self, total):
-        planned = self._planned_clip_count()
+        planned = self._planned_clip_count() if self.resumed_clips is None else self.resumed_clips
         if round(planned) != total:
             self._note(f"{total} avatar {'clip' if total == 1 else 'clips'} instead of the {round(planned)} expected",
                        (total - planned) * self._render_seconds(self.planned_clip_seconds))
@@ -215,6 +227,15 @@ class RunEta:
         # What 'auto' usually picks, within the range this run allows and the scenes there are.
         return min(max(self.timings["auto_clips"], self.clip_range[0]), self.clip_range[1], self.timings["scenes"])
 
+    def _still_to_do(self, name, scenes):
+        """What a step of the current video takes, without the part a continued run kept."""
+        if name in self.kept_stages:
+            return 0
+        if name == "Avatar clips" and self.resumed_clips is not None:
+            left = max(self.resumed_clips - self.kept_clips, 0)
+            return self.timings[name] + left * self._render_seconds(self.planned_clip_seconds)
+        return self._stage_seconds(name, self._planned_clip_count(), scenes)
+
     def _current_left(self, now):
         elapsed = now - self.stage_started
         if self.name == "Avatar clips" and self.clip_count is not None:
@@ -223,9 +244,10 @@ class RunEta:
                 return after
             this_clip = self._render_seconds(self.attempt_seconds) - (now - self.attempt_started)
             return max(this_clip, 0) + after
-        clips = self._planned_clip_count() if self.clip_count is None else self.clip_count
         scenes = self.timings["scenes"] if self.scene_count is None else self.scene_count
-        return max(self._stage_seconds(self.name, clips, scenes) - elapsed, 0)
+        if self.clip_count is None:
+            return max(self._still_to_do(self.name, scenes) - elapsed, 0)
+        return max(self._stage_seconds(self.name, self.clip_count, scenes) - elapsed, 0)
 
     def plan(self):
         """What a run with these options should take, for the panel to show before it starts."""
@@ -234,8 +256,10 @@ class RunEta:
         steps = [{"name": name, "seconds": round(self._stage_seconds(name, clips, self.timings["scenes"]))}
                  for name in names]
         video = sum(step["seconds"] for step in steps)
+        scenes = self.timings["scenes"] if self.scene_count is None else self.scene_count
+        first = round(sum(self._still_to_do(name, scenes) for name in names))
         return {"steps": steps, "video": video, "videos": self.videos_left + 1,
-                "total": video * (self.videos_left + 1), "clips": round(clips),
+                "total": first + video * self.videos_left, "clips": round(clips),
                 "clip_seconds": math.ceil(self.planned_clip_seconds),
                 "clip_render": round(self._render_seconds(self.planned_clip_seconds))}
 
@@ -251,13 +275,15 @@ class RunEta:
         steps = []
         left = 0
         for number, name in enumerate(names, 1):
-            if number < self.number:
+            if name in self.kept_stages:
+                steps.append({"state": "kept", "seconds": 0})
+            elif number < self.number:
                 steps.append({"state": "done", "seconds": round(self.finished.get(number, 0))})
             elif number == self.number:
                 left = self._current_left(now)
                 steps.append({"state": "now", "seconds": round(left)})
             else:
-                seconds = self._stage_seconds(name, clips, scenes)
+                seconds = self._still_to_do(name, scenes)
                 left += seconds
                 steps.append({"state": "next", "seconds": round(seconds)})
 

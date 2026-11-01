@@ -361,6 +361,7 @@
     <div class="hint" id="estimateDetail"></div>
   </div>
   <div class="queue" id="runQueue" data-lane="run" hidden></div>
+  <div class="queue" id="stoppedRuns" hidden></div>
 
   <div class="run-sep"></div>
   <div class="sys" title="ComfyUI renders the avatar clips on your GPU. Generate starts it (without its web page) when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env; otherwise start it yourself. Failed avatar renders fall back to stock footage.">
@@ -659,6 +660,7 @@ function fmtEta(sec) {
 }
 function stepEta(step) {
   if (!step) return '';
+  if (step.state === 'kept') return 'kept';
   if (step.state === 'done') return fmt(step.seconds);
   if (step.state === 'next') return fmtEta(step.seconds);
   return step.seconds > 0 ? `${fmtEta(step.seconds)} left` : 'any moment';
@@ -836,7 +838,7 @@ function renderQueue(el, q, doneIn) {
   el.hidden = !q.items.length && q.results.length < 2;
   if (el.hidden) return;
   const head = !q.items.length ? '<b>Finished</b>' : `<b>Queue (${q.items.length})</b>` + (q.held
-    ? `<span class="when">On hold since you pressed Stop</span><button type="button" data-resume="1">Resume</button>`
+    ? `<span class="when">On hold until you press Resume</span><button type="button" data-resume="1">Resume</button>`
     : doneIn ? `<span class="when">All done around ${clockIn(doneIn)}</span>` : '');
   const now = q.current && q.items.length ? `<div class="queue-item"><div class="what">Now: ${esc(q.current.label)}</div></div>` : '';
   const items = q.items.map((item, i) => `
@@ -854,6 +856,36 @@ function renderQueue(el, q, doneIn) {
     el.dataset.html = html;
   }
 }
+function renderStopped(runs) {
+  const el = $('stoppedRuns');
+  el.hidden = !runs.length;
+  const html = !runs.length ? '' : `<div class="queue-head"><b>Stopped runs (${runs.length})</b></div>` + runs.map(run => `
+    <div class="queue-item">
+      <div class="what">${esc(run.label)}<div class="hint">${esc(run.detail)}</div></div>
+      <span class="when">${fmtEta(run.estimate)}</span>
+      <button type="button" data-continue="${esc(run.id)}">Continue</button>
+      <button type="button" data-discard="${esc(run.id)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard this run">✕</button>
+    </div>`).join('');
+  // Only when it changed, so a poll can't swallow a click on a button it just replaced.
+  if (el.dataset.html !== html) {
+    el.innerHTML = html;
+    el.dataset.html = html;
+  }
+}
+$('stoppedRuns').addEventListener('click', async e => {
+  const d = e.target.dataset || {};
+  let url;
+  if (d.continue) {
+    url = `/runs/${d.continue}/continue`;
+  } else if (d.discard) {
+    const clips = +d.clips ? ` and ${d.clips} avatar ${+d.clips === 1 ? 'clip' : 'clips'}` : '';
+    if (!confirm(`Discard this run? Its script, voice${clips} are deleted and can't be continued.`)) return;
+    url = `/runs/${d.discard}/discard`;
+  } else {
+    return;
+  }
+  await stopJob(url);
+});
 for (const id of ['runQueue', 'uploadQueue']) {
   $(id).addEventListener('click', async e => {
     const d = e.target.dataset || {}, lane = $(id).dataset.lane;
@@ -895,6 +927,7 @@ async function poll() {
   busy = uploadRunning || uploadsQueued > 0 || (running && (data.progress.stage || [])[2] === 'Upload');
   renderUpload(data.upload);
   renderQueue($('runQueue'), queue, queue.held ? 0 : queueAhead);
+  renderStopped(data.stopped_runs);
   $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode && !data.stopped ? ' fail' : ''));
   $('go').disabled = submitting;
   $('check').hidden = running;
@@ -981,7 +1014,7 @@ async function stopJob(url) {
 }
 $('stop').addEventListener('click', async () => {
   const held = runsQueued ? ` The ${runsQueued} queued after it will wait until you press Resume.` : '';
-  if (!confirm(`Stop the current run? This kills it and its ffmpeg renders, and cancels its ComfyUI clips.${held}`)) return;
+  if (!confirm(`Stop the current run? This kills it and its ffmpeg renders, and cancels its ComfyUI clips. You can continue it later under Stopped runs, without the clip being rendered now.${held}`)) return;
   await stopJob('/stop');
 });
 
@@ -994,8 +1027,8 @@ $('stopUpload').addEventListener('click', async () => {
 $('shutdown').addEventListener('click', async e => {
   e.preventDefault();
   const queued = runsQueued + uploadsQueued;
-  const work = [wasRunning && 'force-stops the run in progress', uploadRunning && 'force-stops the upload in progress',
-    queued && `drops ${queued} queued ${queued === 1 ? 'job' : 'jobs'}`, 'closes ComfyUI if the panel started it'].filter(Boolean);
+  const work = [wasRunning && 'force-stops the run in progress, which you can continue later', uploadRunning && 'force-stops the upload in progress',
+    queued && `keeps ${queued} queued ${queued === 1 ? 'job' : 'jobs'} on hold for next time`, 'closes ComfyUI if the panel started it'].filter(Boolean);
   if (!confirm(`Shut down the control panel? This ${work.join(', ')}. Start it again with start_webapp.pyw or the AutoShorts shortcut.`)) return;
   const body = await (await fetch('/shutdown', { method: 'POST' })).json();
   if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }

@@ -33,9 +33,7 @@ auto-yt-shorts/
 ├── comfyui/                # ComfyUI avatar workflows (API format) + node maps
 ├── logs/                   # api_errors.log — every API error with the server's message; api_usage.jsonl — calls counted for the quota list
 ├── assets/                  # Stores all media files
-│   ├── audio_clips/         # Generated voiceovers (.wav)
-│   ├── video_clips/         # Downloaded stock footage (.mp4)
-│   ├── temp/                # Intermediate processing files
+│   ├── runs/                # One folder per video in progress: voice, stock, avatar clips, renders, state.json
 │   └── avatar/              # PUT YOUR AVATAR IMAGE (avatar.jpg) / VIDEO (avatars.mp4) HERE
 │
 ├── modules/                 # Core Logic Modules
@@ -202,6 +200,7 @@ python main.py --voice en-gb-storyteller-2 --output daily_short.mp4
 | `--voice` | A Gemini voice ID (default `en-gb-tutor-13`, a UK female narrator, or `en-us-storyteller-14` with `--lang en-US`) or an `edge-tts` voice ending in `Neural`. |
 | `--output` | Output filename for a single run (default: timestamped). |
 | `--keep-cache` | Keep intermediate audio/video files instead of cleaning them. |
+| `--resume RUN` | Continue a stopped or failed run from its folder under `assets/runs`, with its original options. |
 | `--fail-fast` | Stop a batch at the first failed run. |
 | `--check` | Run preflight checks (ffmpeg, API keys, avatar) and exit. |
 | `--upload` | Upload each finished video to YouTube (see below). |
@@ -264,8 +263,18 @@ videos in Ready when you pressed it. Jobs start in order; one that fails doesn't
 the rest, and the queue lists how each one ended. A video deleted or uploaded while
 waiting is skipped. **Stop** puts what is queued on hold until you press **Resume**, and
 ✕ takes a job out of the queue. Adding or removing a job moves the running ETA, which
-lists each queued job among what moved it; jobs on hold don't count. The queue lives in the
-server's memory: Shut down drops it, and a server crash loses it.
+lists each queued job among what moved it; jobs on hold don't count. What is queued is saved
+in `logs/`, so after Shut down or a crash it comes back on hold until you press **Resume**.
+
+A run that stops partway can continue later. Each video works in its own folder under
+`assets/runs`, and `state.json` there records every finished step and every avatar clip that
+passed its checks. A stopped or failed run, or one cut off by a crash, is listed under
+**Stopped runs** with what is left and how long that should take. **Continue** picks it up with
+its original options and persona, without spending Gemini quota or GPU time on what is done;
+the clip being rendered at the time starts over, and so do the seconds-long render and stitch.
+The rest of a batch comes along with it. ✕ deletes the run. Each one takes roughly 100-150 MB
+until it finishes or you discard it, and the topic picker avoids its topic in the meantime.
+From the command line: `python main.py --resume run_20261101_172553_1`.
 
 Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
@@ -282,7 +291,8 @@ server in the background (no console window; its output goes to
 `logs/webapp.log`) and opens the panel in your default browser. If the server
 is already running it just opens the browser. Stop the server with **Shut down**
 at the top of the panel. It force-stops everything first: the run and its ffmpeg
-renders, the upload, the queues and the run's ComfyUI clips. It also closes ComfyUI
+renders, the upload and the run's ComfyUI clips. The run can be continued and the queues
+come back on hold the next time. It also closes ComfyUI
 if this server started it; a ComfyUI you started yourself, or one left from before the
 server restarted, stays open with any renders of your own.
 

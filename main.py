@@ -13,6 +13,7 @@ from modules.audio import AudioEngine, get_tts_provider
 from modules.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
                                       get_avatar_source, pick_on_screen, plan_avatar_scenes)
 from modules.composer import Composer
+from modules.run_state import RunState, list_runs
 from modules.thumbnail import save_avatar_still
 from modules.topic_history import find_exact_repeat, read_successful_topics, record_successful_topic
 
@@ -160,10 +161,11 @@ def find_repeat(brain, topic, used_topics):
         return None
 
 
-def choose_topic(brain, requested, used_topics):
+def choose_topic(brain, requested, used_topics, stopped_topics=()):
     """
     Returns a topic no successful video has covered yet, or None. A requested
-    topic is checked as-is; the AI picker gets a few tries to suggest a new one.
+    topic is checked as-is; the AI picker gets a few tries to suggest a new one,
+    which must also differ from the runs waiting to be continued.
     """
     if requested:
         topic = requested.strip()
@@ -174,6 +176,7 @@ def choose_topic(brain, requested, used_topics):
         print(f"🎯 Using provided topic: {topic}")
         return topic
 
+    used_topics = used_topics + list(stopped_topics)
     rejected = []
     for _ in range(TOPIC_ATTEMPTS):
         topic = brain.get_trending_topic(used_topics + rejected)
@@ -186,81 +189,104 @@ def choose_topic(brain, requested, used_topics):
     return None
 
 
-async def generate_one(args):
+async def generate_one(args, state):
     """
-    Runs the full pipeline once. Returns the final video path, or None on failure.
+    Runs the pipeline for one video, from wherever `state` got to: a stage it
+    finished earlier is skipped, without its stage marker, so the panel's ETA
+    doesn't time it. Returns the final video path, or None on failure.
     """
     lang = getattr(args, 'lang', 'en-GB')
     upload = getattr(args, 'upload', False)
+    brain = ContentBrain()
 
     # 1. BRAIN: Get Script
-    stage("Topic & script", upload)
-    brain = ContentBrain()
-    try:
-        topic = choose_topic(brain, args.topic, read_successful_topics())
-        if not topic:
+    if state.script:
+        print(f"♻️ Continuing: {state.topic}")
+    else:
+        stage("Topic & script", upload)
+        try:
+            stopped = [run.topic for run in list_runs() if run.topic and run.id != state.id]
+            topic = choose_topic(brain, args.topic, read_successful_topics(), stopped)
+            if not topic:
+                return None
+            script = brain.generate_script(topic, lang=lang)
+        except Exception as e:
+            print(f"❌ Topic/script Error: {e}")
             return None
-        script = brain.generate_script(topic, lang=lang)
-    except Exception as e:
-        print(f"❌ Topic/script Error: {e}")
-        return None
 
-    if not script:
-        print("❌ Script generation failed.")
-        return None
+        if not script:
+            print("❌ Script generation failed.")
+            return None
+        state.update(topic=topic, script=script)
+    topic, script = state.topic, state.script
 
     # 2. AUDIO: Generate Voice
-    stage("Voice", upload)
-    audio_engine = AudioEngine(voice=args.voice, lang=lang)
-    try:
-        script = await audio_engine.process_script(script)
-    except Exception as e:
-        print(f"❌ Audio Error: {e}")
-        return None
+    if state.voiced:
+        print(f"♻️ Keeping the narration for {len(script)} scenes.")
+    else:
+        stage("Voice", upload)
+        audio_engine = AudioEngine(voice=args.voice, lang=lang, output_dir=state.audio_dir)
+        try:
+            script = await audio_engine.process_script(script)
+        except Exception as e:
+            print(f"❌ Audio Error: {e}")
+            return None
 
-    if not script:
-        print("❌ No scene produced audio.")
-        return None
+        if not script:
+            print("❌ No scene produced audio.")
+            return None
+        state.update(script=script, voiced=True)
 
     # 3. ASSETS: Get Stock Video
-    stage("Stock footage", upload)
-    asset_manager = AssetManager()
-    assets_map = asset_manager.get_videos(script, brain.pick_stock_clips)
+    if state.video_pairs is None:
+        stage("Stock footage", upload)
+        asset_manager = AssetManager(clips_dir=state.clips_dir)
+        state.update(video_pairs=asset_manager.get_videos(script, brain.pick_stock_clips))
+    assets_map = [tuple(pair) if pair else None for pair in state.video_pairs]
 
     # 4. COMPOSER: Merge Video + Audio
-    composer = Composer()
+    composer = Composer(temp_dir=state.temp_dir)
 
     # 4a. AVATAR: Decide which scenes show the presenter now that we know what
     # stock footage we have. 'auto' (default) opens on the avatar and picks a count
     # from AVATAR_CLIPS_MIN-MAX, higher when the LLM rates the footage a poor fit.
-    stage("Avatar clips", upload)
+    if not state.avatar_done:
+        stage("Avatar clips", upload)
     layout = getattr(args, 'avatar_clips', None) or default_avatar_layout()
     source = get_avatar_source()
     has_static = os.path.exists(composer.avatar_path)
     generator = None
     if source == "comfyui" and layout != "0":
         try:
-            generator = AvatarGenerator()
+            generator = AvatarGenerator(clips_dir=state.clips_dir)
         except Exception as e:
             print(f"❌ Avatar Error: {e}")
 
-    indices = []
-    if layout != "0" and (generator or has_static):
-        if layout == "auto":
-            eligible = [i for i, scene in enumerate(script)
-                        if generator is None or generator.can_render(scene)]
-            indices = plan_avatar_scenes(script, brain.rate_footage_fit(script), eligible)
-        else:
-            indices = composer.pick_avatar_indices(script, int(layout))
-    for i in indices:
-        script[i]['avatar_seconds'] = pick_on_screen(script[i])
+    if state.avatar_indices is not None:
+        if generator:
+            generator.reference_image = state.reference_image
+    else:
+        indices = []
+        if layout != "0" and (generator or has_static):
+            if layout == "auto":
+                eligible = [i for i, scene in enumerate(script)
+                            if generator is None or generator.can_render(scene)]
+                indices = plan_avatar_scenes(script, brain.rate_footage_fit(script), eligible)
+            else:
+                indices = composer.pick_avatar_indices(script, int(layout))
+        for i in indices:
+            script[i]['avatar_seconds'] = pick_on_screen(script[i])
+        state.update(avatar_indices=indices, reference_image=generator.reference_image if generator else None)
+    indices = state.avatar_indices
 
-    avatar_clips = {}
-    if indices and generator:
-        try:
-            avatar_clips = generator.generate(script, indices, brain)
-        except Exception as e:
-            print(f"❌ Avatar Error: {e}")
+    if not state.avatar_done:
+        if indices and generator:
+            try:
+                generator.generate(script, indices, brain, kept=state.avatar_clips, on_clip=state.keep_clip)
+            except Exception as e:
+                print(f"❌ Avatar Error: {e}")
+        state.update(avatar_done=True)
+    avatar_clips = dict(state.avatar_clips)
     # A failed render still gets an avatar if the static clip exists; otherwise stock
     # footage. Never with lip-sync on: the static clip doesn't speak the line.
     if has_static and not (generator and generator.lipsync):
@@ -268,17 +294,20 @@ async def generate_one(args):
             if i not in avatar_clips:
                 avatar_clips[i] = composer.avatar_path
 
-    stage("Rendering scenes", upload)
-    final_scene_paths = composer.render_all_scenes(script, assets_map, avatar_clips)
+    final_path = state.final
+    if not final_path:
+        stage("Rendering scenes", upload)
+        final_scene_paths = composer.render_all_scenes(script, assets_map, avatar_clips)
 
-    # 5. STITCH WITH TRANSITIONS
-    if not final_scene_paths:
-        print("❌ Failed to generate any scenes.")
-        return None
+        # 5. STITCH WITH TRANSITIONS
+        if not final_scene_paths:
+            print("❌ Failed to generate any scenes.")
+            return None
 
-    stage("Stitching", upload)
-    output_name = args.output if (args.output and args.runs == 1) else build_output_name()
-    final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
+        stage("Stitching", upload)
+        output_name = args.output if (args.output and args.runs == 1) else build_output_name()
+        final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
+        state.update(final=final_path)
 
     narration = " ".join(scene['text'] for scene in script)
 
@@ -311,6 +340,7 @@ async def generate_one(args):
             record_successful_topic(topic, final_path, narration)
         except OSError as e:
             raise RuntimeError(f"Video was created at {final_path}, but its topic could not be recorded: {e}") from e
+        state.remove(keep_files=args.keep_cache)
 
     return final_path
 
@@ -331,14 +361,23 @@ async def main_async(args):
             print(f"❌ {problem}")
         return 1
 
+    state = RunState.load(args.resume) if args.resume else None
+    first = state.number - 1 if state else 0
+    # A continued video only brings along the videos of its batch that are still owed.
+    total = state.number + state.videos_after if state else args.runs
+
     produced = []
-    for run_index in range(args.runs):
-        if args.runs > 1:
-            print(f"\n===== RUN {run_index + 1}/{args.runs} =====")
+    for run_index in range(first, total):
+        if total > 1:
+            print(f"\n===== RUN {run_index + 1}/{total} =====")
         print("🚀 STARTING AUTOMATION...")
 
+        state = state or RunState.new(args.options, run_index + 1, total - run_index - 1)
+        print(f"🗂️ Run folder: {state.id}")
+        state.save()
+
         try:
-            final_path = await generate_one(args)
+            final_path = await generate_one(args, state)
         except Exception as e:
             print(f"❌ Unexpected failure: {e}")
             final_path = None
@@ -347,14 +386,20 @@ async def main_async(args):
             produced.append(final_path)
         elif args.fail_fast:
             print("🛑 Stopping: --fail-fast is set.")
+            print(f"💾 Continue with: python main.py --resume {state.id}")
             break
+        else:
+            state.release_batch()
+            if os.path.exists(state.path):
+                print(f"💾 Progress kept. Continue with: python main.py --resume {state.id}")
+        state = None
 
-    print(f"\n📦 Produced {len(produced)}/{args.runs} video(s).")
+    print(f"\n📦 Produced {len(produced)}/{total - first} video(s).")
     for path in produced:
         print(f"   • {path}")
 
     # Non-zero exit tells cron/CI the run needs attention.
-    return 0 if len(produced) == args.runs else 1
+    return 0 if len(produced) == total - first else 1
 
 
 def parse_args(argv=None):
@@ -377,8 +422,19 @@ def parse_args(argv=None):
                              "(default 3-5), more where the stock footage fits the narration badly; 3 = open on it + "
                              "two middle scenes; 2 = two middle scenes only; 0 = no avatar (default: AVATAR_CLIPS "
                              "from .env, else auto).")
+    parser.add_argument("--resume", metavar="RUN", help="Continue a stopped or failed run with its original options, "
+                                                        "from its folder under assets/runs. Other options are ignored.")
 
-    args = parser.parse_args(argv)
+    options = sys.argv[1:] if argv is None else list(argv)
+    args = parser.parse_args(options)
+    if args.resume:
+        state = RunState.load(args.resume)
+        if not state:
+            parser.error(f"nothing to continue under assets/runs/{args.resume}")
+        os.environ.update(state.env)
+        options = state.argv
+        args = parser.parse_args(options + ["--resume", args.resume])
+    args.options = options
     if args.runs < 1:
         parser.error("--runs must be at least 1")
     if args.topic and args.runs > 1:

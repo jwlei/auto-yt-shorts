@@ -38,7 +38,7 @@ def get_provider():
 
 
 class AssetManager:
-    def __init__(self):
+    def __init__(self, clips_dir=None):
         load_dotenv()
         self.provider = get_provider()
         key_name = PROVIDER_KEYS[self.provider]
@@ -48,7 +48,7 @@ class AssetManager:
         self.label = self.provider.capitalize()
 
         # Ensure download directory exists
-        self.assets_dir = os.path.join(os.getcwd(), "assets", "video_clips")
+        self.assets_dir = clips_dir or os.path.join(os.getcwd(), "assets", "video_clips")
         os.makedirs(self.assets_dir, exist_ok=True)
         self.cache_dir = os.path.join(os.getcwd(), "assets", "search_cache", self.provider)
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -247,12 +247,15 @@ class AssetManager:
         if os.path.exists(save_path):
             return save_path
 
+        # Under another name until complete: a download cut off by Stop would pass as cached.
+        part_path = save_path + ".part"
         try:
             with requests.get(url, stream=True, timeout=15) as r:
                 r.raise_for_status()
-                with open(save_path, 'wb') as f:
+                with open(part_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
+            os.replace(part_path, save_path)
             return save_path
         except Exception as e:
             print(f"      ❌ Error downloading {filename}: {e}")
