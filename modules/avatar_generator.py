@@ -11,6 +11,8 @@ import ffmpeg
 import requests
 from dotenv import load_dotenv
 
+from modules.saved_workflows import frames_for, image_slots
+
 # Where avatar scenes come from, chosen with AVATAR_SOURCE in .env:
 # 'static' loops assets/avatar/avatars.mp4; 'comfyui' renders a fresh clip per scene.
 AVATAR_SOURCES = ("static", "comfyui")
@@ -212,7 +214,9 @@ class AvatarGenerator:
 
     The workflow sits next to a '.map.json' that says which node inputs to fill,
     as "<node id>.<input name>":
-      prompt (required), image, audio, text_to_video, seconds, width, height.
+      prompt (required), image (image_2... for more, and image_link where one is
+      plugged in if it can be left out), audio, text_to_video, seconds (or frames,
+      with fps saying where its frame rate is), width, height.
     Any 'seed' / 'noise_seed' input is randomised on every run. Mapping 'audio'
     turns on lip-sync: each clip is generated to match its scene's narration.
     """
@@ -456,13 +460,20 @@ class AvatarGenerator:
         self._set(workflow, "prompt", prompt)
         if "seconds" in self.fields:
             self._set(workflow, "seconds", seconds)
+        if "frames" in self.fields:
+            node_id, input_name = self.fields["fps"]
+            self._set(workflow, "frames", frames_for(seconds, workflow[node_id]["inputs"][input_name]))
         if "width" in self.fields and "height" in self.fields:
             self._set(workflow, "width", self.width)
             self._set(workflow, "height", self.height)
         if "text_to_video" in self.fields:
             self._set(workflow, "text_to_video", reference is None)
-        if reference:
-            self._set(workflow, "image", reference)
+        for slot in image_slots(self.fields):
+            if reference:
+                self._set(workflow, slot, reference)
+            elif f"{slot}_link" in self.fields:
+                node_id, input_name = self.fields[f"{slot}_link"]
+                del workflow[node_id]["inputs"][input_name]
         if audio:
             self._set(workflow, "audio", audio)
 

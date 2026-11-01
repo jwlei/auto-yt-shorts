@@ -41,6 +41,7 @@ from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
 from modules.run_state import RunState, folder_size, list_runs
+from modules.saved_workflows import list_saved
 from modules.topic_history import read_history
 
 load_dotenv()
@@ -899,6 +900,32 @@ def logout():
     return redirect(url_for("login"))
 
 
+SAVED_WORKFLOWS_DIR = os.path.join(PROJECT_ROOT, "logs", "workflows")
+_saved_workflows_cache = {"at": 0.0, "online": None, "value": []}
+_saved_workflows_lock = threading.Lock()
+
+
+def saved_workflows():
+    # Cached briefly: it asks ComfyUI about every node it has. Not across ComfyUI starting, which is when they appear.
+    online = comfyui_online()
+    with _saved_workflows_lock:
+        cache = _saved_workflows_cache
+        if time.time() - cache["at"] > 30 or cache["online"] != online:
+            url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+            cache.update(at=time.time(), online=online, value=list_saved(url, SAVED_WORKFLOWS_DIR))
+        return cache["value"]
+
+
+def saved_workflow_path(name):
+    """The file that makes a run use this saved workflow. Returns (path, error)."""
+    entry = next((w for w in saved_workflows() if w["name"] == name), None)
+    if not entry:
+        return None, f"ComfyUI has no saved workflow called {name} any more."
+    if "problem" in entry:
+        return None, f"{entry['label']} can't run: {entry['problem']}"
+    return entry["path"], None
+
+
 def on_this_pc():
     return request.remote_addr in ("127.0.0.1", "::1")
 
@@ -977,6 +1004,12 @@ def build_run(form):
         return None, None, "Unknown avatar style."
     env["COMFYUI_WORKFLOW"] = AVATAR_STYLES[style]
 
+    workflow = form.get("workflow")
+    if workflow and source == "comfyui":
+        env["COMFYUI_WORKFLOW"], error = saved_workflow_path(workflow)
+        if error:
+            return None, None, error
+
     for field, low_name, high_name, lowest, highest in AVATAR_SLIDERS:
         try:
             low, high = int(form[f"{field}_min"]), int(form[f"{field}_max"])
@@ -1029,6 +1062,8 @@ def describe_run(form, argv):
     label = topic or ("AI picks the topic" if runs == "1" else f"{runs} videos, AI picks the topics")
     source = form.get("avatar_source") or "comfyui"
     avatar = "no avatar" if form.get("avatar_clips") == "0" else "static avatar" if source == "static" else "ComfyUI avatar"
+    if form.get("workflow") and avatar == "ComfyUI avatar":
+        avatar = f"ComfyUI avatar ({form['workflow'].removesuffix('.json')})"
     upload = f"upload {form.get('privacy') or 'private'}" if form.get("upload") else "no upload"
     return label, " · ".join((form.get("lang") or "en-GB", avatar, upload))
 
@@ -1204,6 +1239,13 @@ def status():
     payload["api_errors"] = recent_api_errors()
     payload["quota"] = cached_quota()
     return payload
+
+
+@app.route("/api/workflows")
+@password_required
+def workflows():
+    found = [{key: w[key] for key in ("name", "label", "problem") if key in w} for w in saved_workflows()]
+    return {"online": comfyui_online(), "workflows": found}
 
 
 @app.route("/videos/<folder>/<path:name>")

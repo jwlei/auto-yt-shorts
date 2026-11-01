@@ -298,6 +298,11 @@
             </select>
           </div>
         </div>
+        <label for="workflow">ComfyUI workflow</label>
+        <select id="workflow" name="workflow">
+          <option value="">Built-in LTX, by Style</option>
+        </select>
+        <div class="hint" id="workflowHint">The workflows you saved in ComfyUI, which replace Style. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. She only lip-syncs in one with a Load Audio node.</div>
         <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
       </div>
     </div>
@@ -465,10 +470,36 @@ function loadForm() {
     else if ([...(el.options || [])].some(o => o.value === String(data[el.name]) && !o.disabled) || !el.options) el.value = data[el.name];
   }
 }
+// --- Workflows saved in ComfyUI ---
+const WORKFLOW_HINT = $('workflowHint').textContent;
+let workflowsFor = null;
+function rememberedWorkflow() {
+  try { return (JSON.parse(localStorage.getItem(STORE_KEY)) || {}).workflow || ''; } catch (e) { return ''; }
+}
+async function loadWorkflows() {
+  let data;
+  try { data = await (await fetch('/api/workflows')).json(); } catch (e) { return; }
+  const select = $('workflow');
+  const key = JSON.stringify(data);
+  // Writing the options closes the list, and this also runs as it opens.
+  if (select.dataset.key === key) return;
+  const wanted = select.dataset.key ? select.value : rememberedWorkflow();
+  select.dataset.key = key;
+  select.innerHTML = '<option value="">Built-in LTX, by Style</option>' + data.workflows.map(w =>
+    `<option value="${esc(w.name)}" ${w.problem ? 'disabled' : ''}>${esc(w.label)}${w.problem ? " (can't run)" : ''}</option>`).join('');
+  if (data.workflows.some(w => w.name === wanted && !w.problem)) select.value = wanted;
+  const off = data.online ? '' : ' ComfyUI is off, so this lists the ones it had last time.';
+  const stuck = data.workflows.filter(w => w.problem).map(w => ` ${w.label} can't run: ${w.problem}`).join('');
+  $('workflowHint').textContent = WORKFLOW_HINT + off + stuck;
+  syncForm();
+}
+$('workflow').addEventListener('focus', loadWorkflows);
+
 function syncForm() {
   $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
   $('clipsSlider').classList.toggle('hidden', $('avatar_clips').value !== 'auto');
-  $('avatar_style').disabled = $('avatar_source').value !== 'comfyui';
+  $('workflow').disabled = $('avatar_source').value !== 'comfyui';
+  $('avatar_style').disabled = $('avatar_source').value !== 'comfyui' || !!$('workflow').value;
   syncSliders();
 }
 $('form').addEventListener('change', () => { syncForm(); saveForm(); });
@@ -963,6 +994,7 @@ async function poll() {
   if (data.lines.length) renderLog(data.lines);
 
   const c = data.comfyui;
+  if (c.online !== workflowsFor) { workflowsFor = c.online; loadWorkflows(); }
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : 'fail');
   $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running'
     : c.starting ? 'starting… (loading models)'
