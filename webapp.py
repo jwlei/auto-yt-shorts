@@ -1,8 +1,8 @@
 """
 Web UI for Auto YT Shorts — the control panel for the whole pipeline.
 
-Starts generation jobs with every pipeline option, streams their log, shows
-whether ComfyUI is up, surfaces recent API errors, and lists the finished
+Starts generation jobs with every pipeline option, queues more while one is
+going, streams their log, shows whether ComfyUI is up, surfaces recent API errors, and lists the finished
 (0_output) and uploaded (1_uploaded) videos for playback and download — from
 the desktop or a phone on the same network.
 
@@ -103,23 +103,23 @@ class Job:
         self.command = None
         self.progress = {}
         self.eta = None
+        self.stopped = False
 
     @property
     def running(self):
         return self.process is not None and self.process.poll() is None
 
-    def start(self, argv, env=None):
+    @property
+    def idle(self):
+        """Past running: _drain is done with the last process too, so a new one can't get mixed up with it."""
+        return self.process is None or self.finished_at is not None
+
+    def start(self, argv, env=None, keep_log=False):
         with self.lock:
-            if self.running:
+            if not self.idle:
                 return False
-            self.lines = []
-            self.started_at = datetime.now()
-            self.finished_at = None
-            self.returncode = None
-            self.command = " ".join(argv[1:])
-            self.progress = {}
-            self.eta = RunEta(argv, env, STAGE_TIMINGS)
-            self.process = subprocess.Popen(
+            eta = RunEta(argv, env, STAGE_TIMINGS)
+            process = subprocess.Popen(
                 argv,
                 cwd=PROJECT_ROOT,
                 stdout=subprocess.PIPE,
@@ -134,6 +134,16 @@ class Job:
                 # Its own process group, so stop() can take ffmpeg down with it.
                 start_new_session=os.name != "nt",
             )
+            if not keep_log:
+                self.lines = []
+            self.started_at = datetime.now()
+            self.finished_at = None
+            self.returncode = None
+            self.command = " ".join(argv[1:])
+            self.progress = {}
+            self.eta = eta
+            self.stopped = False
+            self.process = process
 
         threading.Thread(target=self._drain, daemon=True).start()
         return True
@@ -145,7 +155,7 @@ class Job:
             # ffmpeg's progress carriage-returns would flood the log.
             if not line or line.startswith("frame=") or line.startswith("[") or NATIVE_NOISE.match(line):
                 continue
-            self._add(line)
+            self.log(line)
             self._track(line)
             # Keep memory bounded on long batches.
             if len(self.lines) > 2000:
@@ -156,7 +166,7 @@ class Job:
         self.returncode = process.returncode
         self.finished_at = datetime.now()
 
-    def _add(self, text):
+    def log(self, text):
         self.seq += 1
         self.lines.append({"n": self.seq, "t": datetime.now().strftime("%H:%M:%S"), "text": text})
 
@@ -206,6 +216,7 @@ class Job:
         with self.lock:
             if not self.running:
                 return False
+            self.stopped = True
             pid = self.process.pid
             if os.name == "nt":
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
@@ -215,7 +226,7 @@ class Job:
                     os.killpg(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            self._add("🛑 Stopped by user.")
+            self.log("🛑 Stopped by user.")
         return True
 
     @property
@@ -240,6 +251,122 @@ class Job:
 
 job = Job()
 uploads = Job()
+
+
+class JobQueue:
+    """
+    The jobs waiting for a Job, oldest first, each keeping the options it was
+    queued with. A failed job doesn't stop the ones after it, as in a batch.
+    Stop does: pressing it means nothing should start by itself, so what is
+    queued waits for Resume. Kept in memory, like the Job itself.
+    """
+
+    KEPT_RESULTS = 8
+
+    def __init__(self, job, prepare, blocked=lambda: False):
+        self.job = job
+        self.prepare = prepare  # Last step before a job starts; returns why it can't run, or None.
+        self.blocked = blocked
+        self.lock = threading.Lock()
+        self.items = []
+        self.current = None
+        self.results = []
+        self.held = False
+        self.next_id = 1
+        self.watcher = None
+
+    def add(self, item):
+        """Starts the job if nothing is ahead of it, otherwise queues it. Returns True if it is queued."""
+        with self.lock:
+            # Here and not at import: gunicorn forks after importing, and threads don't survive that.
+            if not self.watcher:
+                self.watcher = threading.Thread(target=self._watch, daemon=True)
+                self.watcher.start()
+            item["id"] = self.next_id
+            self.next_id += 1
+            self.items.append(item)
+            self._advance()
+            item["waited"] = item in self.items
+            return item["waited"]
+
+    def _watch(self):
+        while True:
+            time.sleep(0.5)
+            with self.lock:
+                self._advance()
+
+    def _advance(self):
+        if self.current and self.job.idle:
+            self._finish_current()
+        if not self.items:
+            self.held = False
+        elif self.job.idle and not self.held and not self.blocked():
+            self._start(self.items.pop(0))
+
+    def _finish_current(self):
+        item, self.current = self.current, None
+        code = self.job.returncode
+        if self.job.stopped:
+            self._record(item, "stopped")
+        elif code == 0:
+            self._record(item, "done")
+        else:
+            self._record(item, "failed", f"exit {code}")
+            if self.items:
+                self.job.log(f"❌ {item['label']} failed (exit {code}).")
+
+    def _start(self, item):
+        if item.get("waited"):
+            self.job.log(f"===== Next in the queue: {item['label']} =====")
+        try:
+            error = self.prepare(item)
+            # A job that waited adds to the log, so the one before it can still be read.
+            if not error and self.job.start(item["argv"], item["env"], keep_log=item.get("waited", False)):
+                self.current = item
+                return
+            error = error or "Another job took its place."  # A setup check, started in the moment between two jobs
+        except Exception as e:  # One bad job must not take the watcher thread, and the queue, down with it
+            error = str(e)
+        item["error"] = error
+        self.job.log(f"⚠️ Skipped {item['label']}: {error}")
+        self._record(item, "skipped", error)
+
+    def _record(self, item, outcome, note=None):
+        self.results.append({"label": item["label"], "outcome": outcome, "note": note,
+                             "at": datetime.now().strftime("%H:%M")})
+        del self.results[:-self.KEPT_RESULTS]
+
+    def hold(self):
+        with self.lock:
+            self.held = bool(self.items)
+
+    def resume(self):
+        with self.lock:
+            self.held = False
+            self._advance()
+
+    def remove(self, item_id):
+        with self.lock:
+            kept = [item for item in self.items if item["id"] != item_id]
+            removed = len(kept) != len(self.items)
+            self.items = kept
+            self._advance()
+            return removed
+
+    def pending(self):
+        """Every job not finished yet, the running one included."""
+        with self.lock:
+            self._advance()
+            return ([self.current] if self.current else []) + list(self.items)
+
+    def snapshot(self):
+        with self.lock:
+            self._advance()
+            public = lambda item: {key: item.get(key) for key in ("id", "label", "detail", "estimate", "videos")}
+            return {"items": [public(item) for item in self.items],
+                    "current": public(self.current) if self.current else None,
+                    "results": list(self.results),
+                    "held": self.held}
 
 
 def password_required(view):
@@ -559,6 +686,36 @@ def cached_quota():
     return _quota_cache["value"]
 
 
+def prepare_run(item):
+    """ComfyUI starts when the run does, not when it is queued: it may not be needed for hours."""
+    try:
+        if start_comfyui_for_run(item["form"]):
+            item["env"]["COMFYUI_STARTUP_WAIT"] = str(COMFYUI_STARTUP_WAIT)
+    except RuntimeError as e:
+        return str(e)
+    return None
+
+
+def prepare_upload(item):
+    """Drops videos deleted or uploaded while this upload waited its turn."""
+    gone = [name for name in item["videos"] if not os.path.exists(os.path.join(FOLDERS["output"], name))]
+    if len(gone) == len(item["videos"]):
+        return "no longer in Ready"
+    item["argv"] = [arg for arg in item["argv"] if arg not in gone]
+    item["videos"] = [name for name in item["videos"] if name not in gone]
+    return None
+
+
+run_queue = JobQueue(job, prepare_run)
+# A run's own upload step is waited out, when its video sits in 0_output with no topic recorded yet.
+upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading)
+QUEUES = {"run": run_queue, "upload": upload_queue}
+
+
+def work_left():
+    return job.running or uploads.running or run_queue.pending() or upload_queue.pending()
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     expected = os.getenv("APP_PASSWORD")
@@ -696,25 +853,41 @@ def estimate():
     return {"ok": True, **RunEta(argv, env, STAGE_TIMINGS).plan()}
 
 
+def describe_run(form, argv):
+    """The queue's label and small print for a run built from this form."""
+    topic = (form.get("topic") or "").strip()
+    runs = argv[argv.index("--runs") + 1]
+    label = topic or ("AI picks the topic" if runs == "1" else f"{runs} videos, AI picks the topics")
+    source = form.get("avatar_source") or "comfyui"
+    avatar = "no avatar" if form.get("avatar_clips") == "0" else "static avatar" if source == "static" else "ComfyUI avatar"
+    upload = f"upload {form.get('privacy') or 'private'}" if form.get("upload") else "no upload"
+    return label, " · ".join((form.get("lang") or "en-GB", avatar, upload))
+
+
 @app.route("/generate", methods=["POST"])
 @password_required
 def generate():
-    if job.running:
-        return {"ok": False, "error": "A run is already in progress."}, 409
-
+    """Starts a run, or queues it behind the one in progress."""
     argv, env, error = build_run(request.form)
     if error:
         return {"ok": False, "error": error}, 400
 
-    try:
-        if start_comfyui_for_run(request.form):
-            env["COMFYUI_STARTUP_WAIT"] = str(COMFYUI_STARTUP_WAIT)
-    except RuntimeError as e:
-        return {"ok": False, "error": str(e)}, 500
+    # The second run would stop on the repeated topic or overwrite the file.
+    topic = (request.form.get("topic") or "").strip()
+    output = argv[argv.index("--output") + 1] if "--output" in argv else ""
+    for other in run_queue.pending():
+        if topic and other["topic"].lower() == topic.lower():
+            return {"ok": False, "error": "That topic is already running or queued."}, 409
+        if output and other["output"].lower() == output.lower():
+            return {"ok": False, "error": "That file name is already used by a running or queued job."}, 409
 
-    if not job.start(argv, env):
-        return {"ok": False, "error": "A run is already in progress."}, 409
-    return {"ok": True}
+    label, detail = describe_run(request.form, argv)
+    item = {"label": label, "detail": detail, "argv": argv, "env": env, "topic": topic, "output": output,
+            "form": request.form.to_dict(), "estimate": RunEta(argv, env, STAGE_TIMINGS).plan()["total"]}
+    queued = run_queue.add(item)
+    if item.get("error"):
+        return {"ok": False, "error": item["error"]}, 500
+    return {"ok": True, "queued": queued}
 
 
 @app.route("/check", methods=["POST"])
@@ -727,13 +900,17 @@ def check():
     if error:
         return {"ok": False, "error": error}, 400
     argv.append("--check")
-    job.start(argv, env)
+    if not job.start(argv, env):
+        return {"ok": False, "error": "A run is already in progress."}, 409
     return {"ok": True}
 
 
 @app.route("/stop", methods=["POST"])
 @password_required
 def stop():
+    # Before the kill, or the next job could start as soon as this one dies.
+    if job.running:
+        run_queue.hold()
     stopped = job.stop()
     if stopped:
         interrupt_comfyui()
@@ -743,15 +920,34 @@ def stop():
 @app.route("/publish/stop", methods=["POST"])
 @password_required
 def stop_upload():
+    if uploads.running:
+        upload_queue.hold()
     return {"ok": uploads.stop()}
+
+
+@app.route("/queue/<lane>/remove/<int:item_id>", methods=["POST"])
+@password_required
+def queue_remove(lane, item_id):
+    if lane not in QUEUES:
+        abort(404)
+    return {"ok": QUEUES[lane].remove(item_id)}
+
+
+@app.route("/queue/<lane>/resume", methods=["POST"])
+@password_required
+def queue_resume(lane):
+    if lane not in QUEUES:
+        abort(404)
+    QUEUES[lane].resume()
+    return {"ok": True}
 
 
 @app.route("/shutdown", methods=["POST"])
 @password_required
 def shutdown():
     """Stops the server itself: started from start_webapp.pyw it has no window to close."""
-    if job.running or uploads.running:
-        return {"ok": False, "error": "A run or upload is in progress. Stop it first."}, 409
+    if work_left():
+        return {"ok": False, "error": "A run or upload is in progress or queued. Stop it and empty the queue first."}, 409
     # Reply first, then exit, so the browser gets its answer.
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"ok": True}
@@ -769,7 +965,7 @@ def launcher_refresh():
         code_changed_at = float(request.form.get("code_changed_at", 0))
     except ValueError:
         abort(400)
-    if code_changed_at <= STARTED_AT or job.running or uploads.running:
+    if code_changed_at <= STARTED_AT or work_left():
         return {"restarting": False}
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"restarting": True}
@@ -779,7 +975,9 @@ def launcher_refresh():
 @password_required
 def status():
     payload = job.snapshot()
+    payload["queue"] = run_queue.snapshot()
     payload["upload"] = uploads.snapshot()
+    payload["upload"]["queue"] = upload_queue.snapshot()
     payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
     online = comfyui_online()
     payload["comfyui"] = {"online": online, "can_start": bool(comfyui_launcher()),
@@ -810,28 +1008,41 @@ def youtube_configured():
 @app.route("/publish", methods=["POST"])
 @password_required
 def publish():
-    """Uploads one video from 0_output (form 'video'), or all of them, as a run."""
+    """
+    Uploads one video from 0_output (form 'video'), or all of them, as a run, or
+    queues that behind the upload in progress. All means the videos there now:
+    what the page asked about, not whatever has been made by the time it starts.
+    """
     privacy = request.form.get("privacy") or "private"
     if privacy not in ("private", "unlisted", "public"):
         return {"ok": False, "error": "Unknown privacy setting."}, 400
     if not youtube_configured():
         return {"ok": False, "error": "Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."}, 400
-    if job.uploading:
-        return {"ok": False, "error": "The run is uploading its own video. Try again when that step is done."}, 409
 
+    claimed = {video for other in upload_queue.pending() for video in other["videos"]}
+    ready = list_videos("output")
     argv = [sys.executable, "publish.py", "--privacy", privacy]
     name = request.form.get("video")
     if name:
-        argv.append(os.path.basename(safe_video_path("output", name)))
+        name = os.path.basename(safe_video_path("output", name))
+        if name in claimed:
+            return {"ok": False, "error": "That video is already uploading or queued."}, 409
+        videos = [name]
+        argv.append(name)
         topic = (request.form.get("topic") or "").strip()
         if topic:
             argv += ["--topic", topic]
+        recorded = next((v["topic"] for v in ready if v["name"] == name), None)
+        label = topic or recorded or name
     else:
-        argv.append("--all")
+        videos = sorted(v["name"] for v in ready if v["name"] not in claimed)
+        if not videos:
+            return {"ok": False, "error": "Every ready video is already uploading or queued."}, 409
+        argv += videos
+        label = f"{len(videos)} {'video' if len(videos) == 1 else 'videos'}"
 
-    if not uploads.start(argv):
-        return {"ok": False, "error": "An upload is already in progress."}, 409
-    return {"ok": True}
+    queued = upload_queue.add({"label": label, "detail": privacy, "argv": argv, "env": None, "videos": videos})
+    return {"ok": True, "queued": queued}
 
 
 @app.route("/delete/<folder>/<path:name>", methods=["POST"])

@@ -251,6 +251,16 @@ above the carousel; only one upload runs at a time. Gemini writes the title,
 description, hashtags and tags from the video's recorded topic and narration; a
 video made before the topic history existed needs `--topic` (the panel asks for it).
 
+While a run or upload is going you can queue more. **Generate** becomes **Add to
+queue**, and the Upload buttons become **Queue upload**. Runs and uploads have a queue
+each, so uploads still go during a render. A queued job keeps the options it was
+queued with, whatever you change on the form afterwards, and **Upload all** means the
+videos in Ready when you pressed it. Jobs start in order; one that fails doesn't stop
+the rest, and the queue lists how each one ended. A video deleted or uploaded while
+waiting is skipped. **Stop** puts what is queued on hold until you press **Resume**, and
+✕ takes a job out of the queue. The queue lives in the server's memory: Shut down is
+refused while anything is queued, and a server crash loses it.
+
 Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
 (`GEMINI_FAST_MODEL`) checks the new topic against that history and rejects it
@@ -279,7 +289,7 @@ ComfyUI automatically if `COMFYUI_LAUNCHER` (e.g.
 `C:\ComfyUI\run_nvidia_gpu.bat`) is set in `.env`, and the avatar stage waits up
 to 3 minutes for it to finish loading. It runs the script's `main.py` command
 with `--disable-auto-launch`, so no ComfyUI browser tab opens, in a minimised
-console window you can close to stop it. **Stop** (in place of Generate while a
+console window you can close to stop it. **Stop** (next to Add to queue while a
 run is going) kills the run and its ffmpeg renders and cancels the ComfyUI clip
 it was rendering; the panel and ComfyUI keep running. Without a launcher, start ComfyUI
 yourself; failed avatar renders fall back to stock footage.
@@ -305,8 +315,7 @@ APP_PASSWORD=pick-something python webapp.py --host 0.0.0.0 --port 8800
 Then open `http://<your-computer-ip>:8800` on the phone.
 
 - One run at a time — rendering saturates the CPU, so a second concurrent run
-  would only make both slower. Starting one while another is going returns a
-  clear error instead of queueing silently.
+  would only make both slower. Starting one while another is going queues it.
 - **`--host` other than `127.0.0.1` requires `APP_PASSWORD`.** The server
   refuses to start otherwise: anyone who found the URL could spend your Gemini
   and stock video quota.

@@ -25,6 +25,18 @@
   #uploadBox .status { margin-bottom: 8px; }
   #uploadBox .log { max-height: 130px; margin-bottom: 12px; }
   #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
+  .queue { margin-top: 12px; font-size: .84rem; }
+  #uploadQueue { margin: 0 0 12px; }
+  .queue-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; margin-bottom: 4px; }
+  .queue-head b { font-weight: 600; }
+  .queue-head .when { color: var(--muted); font-size: .78rem; }
+  .queue-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .queue-item .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .queue-item .hint { margin-top: 0; }
+  .queue-item .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .queue button { width: auto; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .queue .results { margin-top: 6px; }
+  .queue .failed { color: var(--err); }
   /* One row per line: a muted timestamp gutter, then the text colour-coded by kind. */
   .ln { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px; padding: 1px 0; }
   .ln .t { color: #5d6376; font: .74rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
@@ -195,7 +207,7 @@
 <div class="top">
   <div class="title">
     <h1>🎬 Auto YT Shorts</h1>
-    <p class="sub">Pick your options, press Generate, and watch it work. Finished videos wait under Ready until you upload them.</p>
+    <p class="sub">Pick your options, press Generate, and watch it work. Queue more while it runs. Finished videos wait under Ready until you upload them.</p>
   </div>
   <div style="display:flex;gap:14px;align-items:center">
     <a href="#" id="shutdown" title="Stops the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
@@ -348,6 +360,7 @@
     <div id="estimateTotal"></div>
     <div class="hint" id="estimateDetail"></div>
   </div>
+  <div class="queue" id="runQueue" data-lane="run" hidden></div>
 
   <div class="run-sep"></div>
   <div class="sys" title="ComfyUI renders the avatar clips on your GPU. Generate starts it (without its web page) when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env; otherwise start it yourself. Failed avatar renders fall back to stock footage.">
@@ -397,6 +410,7 @@
       <span id="uploadStatus"></span>
       <button type="button" class="danger" id="stopUpload" hidden>Stop</button>
     </div>
+    <div class="queue" id="uploadQueue" data-lane="upload" hidden></div>
     <div class="log" id="uploadLog"></div>
   </div>
   <div class="carousel" id="videos"></div>
@@ -494,7 +508,8 @@ for (const id of ['clipsRange', 'secondsRange']) {
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 const CAN_UPLOAD = {{ can_upload | tojson }};
 const NO_KEYS = 'Set the YouTube keys in .env first (run scripts/authorize_youtube.py once).';
-let busy = false;  // An upload is in progress, or a run is uploading its own video; one at a time.
+let busy = false;  // An upload is in progress or queued, or a run is uploading its own video: a new one waits.
+let uploadingNow = new Set(), uploadQueued = new Set();  // Videos an upload has already claimed.
 
 function slides() { return [...$('videos').querySelectorAll('.vid')]; }
 function currentSlide() {
@@ -522,12 +537,17 @@ function updateNav() {
   $('nextVid').disabled = i >= n - 1;
 }
 
+function unclaimedVideos() {
+  return lastVideos.output.filter(v => !uploadingNow.has(v.name) && !uploadQueued.has(v.name));
+}
+
 function renderVideos() {
   const videos = lastVideos[folder] || [];
   $('countOutput').textContent = lastVideos.output.length;
   $('countUploaded').textContent = lastVideos.uploaded.length;
   $('uploadAll').hidden = folder !== 'output';
-  $('uploadAll').disabled = busy || !CAN_UPLOAD || !lastVideos.output.length;
+  $('uploadAll').disabled = !CAN_UPLOAD || !unclaimedVideos().length;
+  $('uploadAll').textContent = busy ? 'Queue upload all' : 'Upload all';
 
   const key = folder + '|' + videos.map(v => v.name + v.mtime + (v.topic || '')).join(',');
   // Keep players that already exist so a poll does not interrupt playback.
@@ -551,7 +571,9 @@ function renderVideos() {
     if (back > 0) goToSlide(back, false);
   }
   for (const b of $('videos').querySelectorAll('[data-up]')) {
-    b.disabled = busy || !CAN_UPLOAD;
+    const now = uploadingNow.has(b.dataset.up), queued = uploadQueued.has(b.dataset.up);
+    b.disabled = now || queued || !CAN_UPLOAD;
+    b.textContent = now ? 'Uploading…' : queued ? 'Queued' : busy ? 'Queue upload' : 'Upload';
     b.title = CAN_UPLOAD ? '' : NO_KEYS;
   }
   updateNav();
@@ -580,15 +602,17 @@ $('videos').addEventListener('click', async e => {
       topic = (prompt(`No topic was recorded for ${d.up}. What is it about? Gemini writes the title and description from this.`) || '').trim();
       if (!topic) return;
     }
-    if (!confirm(`Upload ${d.up} to YouTube ${privacyNote()}?`)) return;
+    const when = busy ? ' when the current upload is done' : '';
+    if (!confirm(`Upload ${d.up} to YouTube ${privacyNote()}${when}?`)) return;
     startUpload(topic ? { video: d.up, topic } : { video: d.up });
   }
 });
 $('uploadAll').addEventListener('click', () => {
-  const videos = lastVideos.output;
+  const videos = unclaimedVideos();
   const missing = videos.filter(v => !v.topic).length;
   const skip = missing ? `\n\n${missing} without a recorded topic will be skipped; upload those on their own.` : '';
-  if (!confirm(`Upload all ${videos.length} video(s) to YouTube ${privacyNote()}?${skip}`)) return;
+  const when = busy ? ' when the current upload is done' : '';
+  if (!confirm(`Upload ${videos.length} video(s) to YouTube ${privacyNote()}${when}?${skip}`)) return;
   startUpload({});
 });
 $('prevVid').onclick = () => goToSlide(currentSlide() - 1);
@@ -664,6 +688,8 @@ function renderEtaDetail(eta) {
 
 // --- Estimate before a run, from the form's current options ---
 let plan = null, planRequest = 0, planTimer = 0;
+// Seconds of work ahead of a new run; null while the queue is on hold, when nobody can say.
+let queueAhead = 0;
 function renderPlan() {
   if (!plan) return;
   if (!plan.ok) {
@@ -671,7 +697,9 @@ function renderPlan() {
     $('estimateDetail').textContent = '';
     return;
   }
-  $('estimateTotal').innerHTML = `Estimated time: <b>${fmtEta(plan.total)}</b> · done around ${clockIn(plan.total)}`;
+  const when = queueAhead === null ? ''
+    : ` · ${queueAhead ? 'after the jobs ahead, ' : ''}done around ${clockIn(queueAhead + plan.total)}`;
+  $('estimateTotal').innerHTML = `Estimated time: <b>${fmtEta(plan.total)}</b>${when}`;
   const parts = [];
   if (plan.videos > 1) parts.push(`${plan.videos} videos, ${fmtEta(plan.video)} each`);
   parts.push(plan.clips
@@ -785,16 +813,54 @@ const renderLog = logWriter($('log'), () => autoScroll);
 const renderUploadLog = logWriter($('uploadLog'), () => true);
 
 function renderUpload(up) {
-  $('uploadBox').hidden = !up.lines.length;
-  $('uploadDot').className = 'dot' + (up.running ? ' on' : (up.returncode ? ' fail' : ' ok'));
+  $('uploadBox').hidden = !up.lines.length && !up.queue.items.length;
+  $('uploadDot').className = 'dot' + (up.running ? ' on' : (up.returncode ? ' fail' : up.started_at ? ' ok' : ''));
   $('stopUpload').hidden = !up.running;
   $('uploadStatus').textContent = up.running ? `Uploading · ${fmt(up.elapsed)} so far`
+    : up.queue.items.length && !up.queue.held ? 'Waiting to upload'
+    : !up.started_at ? ''
     : up.returncode === 0 ? 'Upload finished ✔' : `Upload failed (exit ${up.returncode})`;
+  renderQueue($('uploadQueue'), up.queue, 0);
   if (up.lines.length) renderUploadLog(up.lines);
 }
 
+// --- Queues ---
+const RESULT_MARKS = { done: '✔', failed: '✖ failed', stopped: '■ stopped', skipped: '– skipped' };
+function renderQueue(el, q, doneIn) {
+  // One finished job and nothing waiting says nothing the status line doesn't.
+  el.hidden = !q.items.length && q.results.length < 2;
+  if (el.hidden) return;
+  const head = !q.items.length ? '<b>Finished</b>' : `<b>Queue (${q.items.length})</b>` + (q.held
+    ? `<span class="when">On hold since you pressed Stop</span><button type="button" data-resume="1">Resume</button>`
+    : doneIn ? `<span class="when">All done around ${clockIn(doneIn)}</span>` : '');
+  const now = q.current && q.items.length ? `<div class="queue-item"><div class="what">Now: ${esc(q.current.label)}</div></div>` : '';
+  const items = q.items.map((item, i) => `
+    <div class="queue-item">
+      <div class="what">${i + 1}. ${esc(item.label)}<div class="hint">${esc(item.detail)}</div></div>
+      ${item.estimate ? `<span class="when">${fmtEta(item.estimate)}</span>` : ''}
+      <button type="button" data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue">✕</button>
+    </div>`).join('');
+  const results = q.results.length ? `<div class="hint results">${q.results.map(r =>
+    `<div class="${r.outcome === 'failed' ? 'failed' : ''}">${r.at} ${RESULT_MARKS[r.outcome]}: ${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</div>`).join('')}</div>` : '';
+  const html = `<div class="queue-head">${head}</div>${now}${items}${results}`;
+  // Only when it changed, so a poll can't swallow a click on a button it just replaced.
+  if (el.dataset.html !== html) {
+    el.innerHTML = html;
+    el.dataset.html = html;
+  }
+}
+for (const id of ['runQueue', 'uploadQueue']) {
+  $(id).addEventListener('click', async e => {
+    const d = e.target.dataset || {}, lane = $(id).dataset.lane;
+    if (d.remove) await fetch(`/queue/${lane}/remove/${d.remove}`, { method: 'POST' });
+    else if (d.resume) await fetch(`/queue/${lane}/resume`, { method: 'POST' });
+    else return;
+    poll();
+  });
+}
+
 // --- Status polling ---
-let wasRunning = false;
+let wasRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
 async function poll() {
   let data;
   try {
@@ -806,16 +872,27 @@ async function poll() {
   const running = data.running;
   if (wasRunning && !running) refreshPlan();  // That run just improved the timings
   wasRunning = running;
-  $('estimate').hidden = running;
+  const queue = data.queue, upq = data.upload.queue;
+  runsQueued = queue.items.length;
+  uploadsQueued = upq.items.length;
+  // Between two jobs for a moment: the next is about to start, so this isn't "Finished".
+  const nextUp = !running && runsQueued > 0 && !queue.held;
+  const waitingWork = queue.items.reduce((sum, item) => sum + (item.estimate || 0), 0);
+  const runningLeft = running && data.progress.eta ? data.progress.eta.total_left : 0;
+  queueAhead = queue.held ? null : runningLeft + waitingWork;
+  $('estimate').hidden = false;
   renderPlan();  // The clock has moved on
-  busy = data.upload.running || (running && (data.progress.stage || [])[2] === 'Upload');
+  uploadingNow = new Set(upq.current ? upq.current.videos : []);
+  uploadQueued = new Set(upq.items.flatMap(item => item.videos));
+  busy = data.upload.running || uploadsQueued > 0 || (running && (data.progress.stage || [])[2] === 'Upload');
   renderUpload(data.upload);
-  $('dot').className = 'dot' + (running ? ' on' : (data.returncode ? ' fail' : ''));
-  $('go').disabled = running;
-  $('check').disabled = running;
-  $('go').textContent = running ? 'Running…' : 'Generate';
+  renderQueue($('runQueue'), queue, queue.held ? 0 : queueAhead);
+  $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode ? ' fail' : ''));
+  $('go').disabled = submitting;
+  $('check').hidden = running;
+  $('check').disabled = submitting;
+  $('go').textContent = running || runsQueued ? 'Add to queue' : 'Generate';
   $('stop').hidden = !running;
-  $('go').hidden = running;
 
   renderNow(data);
   renderEtaDetail(running ? (data.progress || {}).eta : null);
@@ -825,6 +902,8 @@ async function poll() {
     const run = p.run ? ` · video ${p.run[0]} of ${p.run[1]}` : '';
     const eta = p.eta ? ` · ${totalEta(p.eta)}` : '';
     $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} so far (started ${data.started_at})${eta}`;
+  } else if (nextUp) {
+    $('statusText').textContent = 'Starting the next job in the queue…';
   } else if (data.returncode === 0) {
     $('statusText').textContent = 'Finished ✔';
   } else if (data.returncode !== null) {
@@ -860,27 +939,41 @@ $('log').addEventListener('scroll', () => {
 
 async function startJob(url) {
   $('formError').hidden = true;
+  submitting = true;
   $('go').disabled = true;
   $('check').disabled = true;
-  autoScroll = true;
-  const res = await fetch(url, { method: 'POST', body: new FormData($('form')) });
-  const body = await res.json();
+  let body;
+  try {
+    body = await (await fetch(url, { method: 'POST', body: new FormData($('form')) })).json();
+  } catch (e) {
+    body = { error: 'Could not reach the panel. Try again.' };
+  }
+  submitting = false;
   if (!body.ok) {
     $('formError').textContent = body.error || 'Could not start.';
     $('formError').hidden = false;
+  } else if (body.queued) {
+    // The options stay for the next job, but a topic and file name belong to this one.
+    $('topic').value = '';
+    $('output').value = '';
+    queuePlan();
+  } else {
+    autoScroll = true;
   }
   poll();
 }
 $('form').addEventListener('submit', e => { e.preventDefault(); saveForm(); startJob('/generate'); });
 $('check').addEventListener('click', () => startJob('/check'));
 $('stop').addEventListener('click', async () => {
-  if (!confirm('Stop the current run? This kills it and its ffmpeg renders, and cancels the ComfyUI clip it is rendering.')) return;
+  const held = runsQueued ? ` The ${runsQueued} queued after it will wait until you press Resume.` : '';
+  if (!confirm(`Stop the current run? This kills it and its ffmpeg renders, and cancels the ComfyUI clip it is rendering.${held}`)) return;
   await fetch('/stop', { method: 'POST' });
   poll();
 });
 
 $('stopUpload').addEventListener('click', async () => {
-  if (!confirm('Stop the upload? A video that has not finished sending stays in Ready.')) return;
+  const held = uploadsQueued ? ` The ${uploadsQueued} queued after it will wait until you press Resume.` : '';
+  if (!confirm(`Stop the upload? A video that has not finished sending stays in Ready.${held}`)) return;
   await fetch('/publish/stop', { method: 'POST' });
   poll();
 });
