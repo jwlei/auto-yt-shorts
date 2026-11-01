@@ -403,6 +403,7 @@
       <button type="button" id="tabOutput" class="active">Ready (<span id="countOutput">0</span>)</button>
       <button type="button" id="tabUploaded">Uploaded (<span id="countUploaded">0</span>)</button>
     </div>
+    <button type="button" class="ghost" id="openFolder" title="Open this tab's folder in File Explorer." {% if not can_open_folders %}hidden{% endif %}>Open folder</button>
     <button type="button" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."{% endif %}>Upload all</button>
   </div>
   <div id="uploadBox" hidden>
@@ -616,6 +617,10 @@ $('uploadAll').addEventListener('click', () => {
   if (!confirm(`Upload ${videos.length} video(s) to YouTube ${privacyNote()}${when}?${skip}`)) return;
   startUpload({});
 });
+$('openFolder').onclick = async () => {
+  const data = await (await fetch(`/folders/${folder}/open`, { method: 'POST' })).json();
+  if (!data.ok) alert(data.error || 'Could not open the folder.');
+};
 $('prevVid').onclick = () => goToSlide(currentSlide() - 1);
 $('nextVid').onclick = () => goToSlide(currentSlide() + 1);
 let navFrame = 0;

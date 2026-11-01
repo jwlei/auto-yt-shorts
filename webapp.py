@@ -899,6 +899,15 @@ def logout():
     return redirect(url_for("login"))
 
 
+def on_this_pc():
+    return request.remote_addr in ("127.0.0.1", "::1")
+
+
+def can_open_folders():
+    """Explorer opens on the PC running the server, which is no use to someone on their phone."""
+    return os.name == "nt" and on_this_pc()
+
+
 @app.route("/")
 @password_required
 def index():
@@ -918,6 +927,7 @@ def index():
         },
         static_avatar=os.path.exists(os.path.join(PROJECT_ROOT, "assets", "avatar", "avatars.mp4")),
         can_upload=youtube_configured(),
+        can_open_folders=can_open_folders(),
     )
 
 
@@ -1165,7 +1175,7 @@ def launcher_refresh():
     Exits if the code changed after this server started, so start_webapp.pyw can
     start a fresh one. Only answers this PC, and never stops a run.
     """
-    if request.remote_addr not in ("127.0.0.1", "::1"):
+    if not on_this_pc():
         abort(403)
     try:
         code_changed_at = float(request.form.get("code_changed_at", 0))
@@ -1206,6 +1216,22 @@ def video(folder, name):
 @password_required
 def download(folder, name):
     return send_file(safe_video_path(folder, name), as_attachment=True, download_name=name)
+
+
+@app.route("/folders/<folder>/open", methods=["POST"])
+@password_required
+def open_folder(folder):
+    """Shows a tab's folder in File Explorer."""
+    if not can_open_folders():
+        abort(403)
+    if folder not in FOLDERS:
+        abort(404)
+    try:
+        os.makedirs(FOLDERS[folder], exist_ok=True)
+        os.startfile(FOLDERS[folder])
+    except OSError as e:
+        return {"ok": False, "error": f"Could not open the folder: {e}"}, 500
+    return {"ok": True}
 
 
 def youtube_configured():

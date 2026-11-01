@@ -223,7 +223,8 @@ style, YouTube upload and privacy, advanced flags) with a hint under each, a
 "Check setup" button, a live log, ComfyUI status, recent API errors, and a
 carousel of the videos in `0_output` (Ready) and `1_uploaded` (Uploaded). Each
 ready video has **Upload** and **Delete**; **Upload all** sends every ready video
-(uploads use the privacy picked under Publish, public by default). On a desktop at least 1280px
+(uploads use the privacy picked under Publish, public by default). **Open folder** shows
+the tab's folder in File Explorer; it's only there on this PC, not on your phone. On a desktop at least 1280px
 wide the options, the run card (Generate, ComfyUI, progress, log) and the
 portrait videos sit in three columns on one screen.
 
