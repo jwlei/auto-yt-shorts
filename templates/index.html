@@ -666,8 +666,9 @@ function stepEta(step) {
 function clockIn(sec) {
   return new Date(Date.now() + sec * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 }
-function totalEta(eta) {
-  return `${fmtEta(eta.total_left)} left, done around ${clockIn(eta.total_left)}`;
+function totalEta(eta, waitingWork) {
+  const left = eta.total_left + waitingWork;
+  return `${fmtEta(left)} left${waitingWork ? ' with the queue' : ''}, done around ${clockIn(left)}`;
 }
 // What moved the ETA, with its effect: '+6 min', or nothing for a change that costs no time.
 function etaChange(change) {
@@ -675,14 +676,17 @@ function etaChange(change) {
   const effect = change.seconds ? `${sign}${fmtEta(Math.abs(change.seconds)).slice(1)} · ` : '';
   return `<div>${effect}${esc(change.text)}</div>`;
 }
-function renderEtaDetail(eta) {
+function renderEtaDetail(eta, queued) {
   const box = $('etaDetail');
   box.hidden = !eta;
   if (!eta) return;
+  const added = queued.map(item => ({ text: `Queued: ${item.label}`, seconds: item.estimate || 0 }));
+  const changes = eta.changes.concat(added);
+  const waitingWork = added.reduce((sum, change) => sum + change.seconds, 0);
   const original = `Original ETA: <b>${fmtEta(eta.original_total)}</b>, done around ${clockIn(eta.original_left)}`;
-  box.innerHTML = eta.changes.length
-    ? `${original}<br>Adjusted ETA: <b>${fmtEta(eta.adjusted_total)}</b>, done around ${clockIn(eta.total_left)}`
-      + `<div class="changes">${eta.changes.map(etaChange).join('')}</div>`
+  box.innerHTML = changes.length
+    ? `${original}<br>Adjusted ETA: <b>${fmtEta(eta.adjusted_total + waitingWork)}</b>, done around ${clockIn(eta.total_left + waitingWork)}`
+      + `<div class="changes">${changes.map(etaChange).join('')}</div>`
     : `${original} · on track`;
 }
 
@@ -877,7 +881,9 @@ async function poll() {
   uploadsQueued = upq.items.length;
   // Between two jobs for a moment: the next is about to start, so this isn't "Finished".
   const nextUp = !running && runsQueued > 0 && !queue.held;
-  const waitingWork = queue.items.reduce((sum, item) => sum + (item.estimate || 0), 0);
+  // On hold they won't start by themselves, so they aren't part of when this all ends.
+  const queuedNext = queue.held ? [] : queue.items;
+  const waitingWork = queuedNext.reduce((sum, item) => sum + (item.estimate || 0), 0);
   const runningLeft = running && data.progress.eta ? data.progress.eta.total_left : 0;
   queueAhead = queue.held ? null : runningLeft + waitingWork;
   $('estimate').hidden = false;
@@ -895,12 +901,12 @@ async function poll() {
   $('stop').hidden = !running;
 
   renderNow(data);
-  renderEtaDetail(running ? (data.progress || {}).eta : null);
+  renderEtaDetail(running ? (data.progress || {}).eta : null, queuedNext);
 
   if (running) {
     const p = data.progress || {};
     const run = p.run ? ` · video ${p.run[0]} of ${p.run[1]}` : '';
-    const eta = p.eta ? ` · ${totalEta(p.eta)}` : '';
+    const eta = p.eta ? ` · ${totalEta(p.eta, waitingWork)}` : '';
     $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} so far (started ${data.started_at})${eta}`;
   } else if (nextUp) {
     $('statusText').textContent = 'Starting the next job in the queue…';

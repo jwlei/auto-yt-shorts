@@ -263,8 +263,9 @@ queued with, whatever you change on the form afterwards, and **Upload all** mean
 videos in Ready when you pressed it. Jobs start in order; one that fails doesn't stop
 the rest, and the queue lists how each one ended. A video deleted or uploaded while
 waiting is skipped. **Stop** puts what is queued on hold until you press **Resume**, and
-✕ takes a job out of the queue. The queue lives in the server's memory: Shut down is
-refused while anything is queued, and a server crash loses it.
+✕ takes a job out of the queue. Adding or removing a job moves the running ETA, which
+lists each queued job among what moved it; jobs on hold don't count. The queue lives in the
+server's memory: Shut down is refused while anything is queued, and a server crash loses it.
 
 Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
