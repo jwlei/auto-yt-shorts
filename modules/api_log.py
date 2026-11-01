@@ -3,11 +3,20 @@ import os
 import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from modules.paths import PROJECT_ROOT
 
 LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
 USAGE_PATH = os.path.join(PROJECT_ROOT, "logs", "api_usage.jsonl")
+
+# Google's daily quotas roll over at midnight Pacific, whatever the local time is.
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def quota_day(moment=None):
+    """The quota day of a datetime (a naive one is local time, as in the error log), by default now."""
+    return (moment or datetime.now()).astimezone(PACIFIC).date()
 
 
 def is_daily_quota(error):

@@ -345,7 +345,7 @@
   <div class="section" id="formQuota">
     <div class="section-title">Quota today</div>
     <div id="quota"></div>
-    <div class="hint"><span id="quotaReset"></span> Google doesn't report what's left, so Gemini and YouTube are counted from this app's own calls; other apps on the same key aren't included. "Limit hit" comes from Google itself. Stock footage figures come from the provider.</div>
+    <div class="hint"><span id="quotaReset"></span> Google doesn't report what's left, so Gemini and YouTube are counted from this app's own calls; other apps on the same key aren't included. "Limit hit" comes from Google itself, and clears if a later call gets through. Stock footage figures come from the provider.</div>
   </div>
 </form>
 
@@ -388,8 +388,8 @@
   <div id="apiCard" hidden>
     <div class="run-sep"></div>
     <details>
-      <summary>⚠️ Recent API errors (<span id="apiCount">0</span>)</summary>
-      <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time (the error says exactly when). Full history: <code>logs/api_errors.log</code>.</div>
+      <summary>⚠️ API errors since the quota reset (<span id="apiCount">0</span>)</summary>
+      <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time, and this list starts over then. Full history: <code>logs/api_errors.log</code>.</div>
       <div id="apiErrors"></div>
     </details>
   </div>

@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
-from modules.api_log import summarize_api_error
+from modules.api_log import quota_day, summarize_api_error
 from modules.avatar_generator import avatar_clip_range, on_screen_range
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
@@ -661,15 +661,22 @@ def start_comfyui_for_run(form):
 
 
 def recent_api_errors(count=12):
+    """The latest errors since the quota reset: an older "daily limit reached" no longer applies."""
     try:
         with open(API_ERROR_LOG, "r", encoding="utf-8") as f:
             lines = f.readlines()[-count:]
     except OSError:
         return []
+    today = quota_day()
     errors = []
     for line in reversed(lines):
         parts = line.rstrip("\n").split("\t")
         if len(parts) >= 5:
+            try:
+                if quota_day(datetime.fromisoformat(parts[0])) != today:
+                    continue
+            except ValueError:
+                continue
             errors.append({"when": parts[0].replace("T", " "), "service": parts[1], "model": parts[2],
                            "status": parts[3], "message": summarize_api_error(parts[4])})
     return errors

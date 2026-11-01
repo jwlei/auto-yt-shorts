@@ -241,8 +241,13 @@ The left column lists today's quota per model: Gemini text and voice models, the
 provider and YouTube upload units. Google has no API for what is left of a quota, so
 Gemini and YouTube are counted from this app's own successful calls
 (`logs/api_usage.jsonl`), and a daily-limit error from Google marks a model as used up,
-with the limit it states replacing the free-tier figure. Calls from other apps on the
-same key aren't counted. Stock figures come from the provider's response headers.
+with the limit it states replacing the free-tier figure, until a later call to that model
+gets through. Calls from other apps on the same key aren't counted. Stock figures come from
+the provider's response headers.
+
+Gemini and YouTube counts, limit-hit marks and the panel's API error list all start over at
+midnight Pacific, when Google resets its quotas, whatever the local time is. A batch
+running past that moment tries its used-up models again. The log files keep the full history.
 
 Uploads from the panel run `publish.py`, which you can also use directly:
 `python publish.py short_20261029_233100.mp4 --privacy unlisted` or
