@@ -265,7 +265,7 @@ the rest, and the queue lists how each one ended. A video deleted or uploaded wh
 waiting is skipped. **Stop** puts what is queued on hold until you press **Resume**, and
 ✕ takes a job out of the queue. Adding or removing a job moves the running ETA, which
 lists each queued job among what moved it; jobs on hold don't count. The queue lives in the
-server's memory: Shut down is refused while anything is queued, and a server crash loses it.
+server's memory: Shut down drops it, and a server crash loses it.
 
 Every successfully created video records its topic, narration and filename in
 `logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
@@ -281,7 +281,10 @@ Double-click **`start_webapp.pyw`** in the project folder. It starts the panel's
 server in the background (no console window; its output goes to
 `logs/webapp.log`) and opens the panel in your default browser. If the server
 is already running it just opens the browser. Stop the server with **Shut down**
-at the top of the panel.
+at the top of the panel. It force-stops everything first: the run and its ffmpeg
+renders, the upload, the queues and the run's ComfyUI clips. It also closes ComfyUI
+if this server started it; a ComfyUI you started yourself, or one left from before the
+server restarted, stays open with any renders of your own.
 
 For a Desktop / Start menu shortcut that does the same, run once:
 
@@ -296,8 +299,9 @@ ComfyUI automatically if `COMFYUI_LAUNCHER` (e.g.
 to 3 minutes for it to finish loading. It runs the script's `main.py` command
 with `--disable-auto-launch`, so no ComfyUI browser tab opens, in a minimised
 console window you can close to stop it. **Stop** (next to Add to queue while a
-run is going) kills the run and its ffmpeg renders and cancels the ComfyUI clip
-it was rendering; the panel and ComfyUI keep running. Without a launcher, start ComfyUI
+run is going) kills the run and its ffmpeg renders, cancels its ComfyUI clips and
+removes a half-stitched video; the panel and ComfyUI keep running, and renders you
+started in ComfyUI yourself carry on. Without a launcher, start ComfyUI
 yourself; failed avatar renders fall back to stock footage.
 
 To keep that phone address the same, give the PC a fixed IP: in your router's

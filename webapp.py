@@ -36,7 +36,7 @@ from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
 from modules.api_log import quota_day, summarize_api_error
-from modules.avatar_generator import avatar_clip_range, on_screen_range
+from modules.avatar_generator import COMFYUI_CLIENT_ID, avatar_clip_range, on_screen_range
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
@@ -50,6 +50,9 @@ STAGE_TIMINGS = os.path.join(PROJECT_ROOT, "logs", "stage_timings.json")
 # Keeps the pipeline and nvidia-smi from flashing a console window when the
 # server itself runs windowless (start_webapp.pyw).
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# How long a killed process gets to disappear before it counts as surviving.
+STOP_WAIT = 10
+STOP_FAILED = "It could not be stopped. End it in Task Manager (python.exe)."
 API_ERROR_LOG = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
 # start_webapp.pyw compares this with the code on disk to replace a server that
 # predates an update (templates are cached and Python only loads at start).
@@ -84,6 +87,18 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 NATIVE_NOISE = re.compile(r"^[WI]\d{4} \d\d:\d\d:\d\d|^WARNING: Logging before InitGoogle|^INFO: Created TensorFlow Lite")
 
 
+def kill_tree(pid):
+    """Kills a process and every process it started: terminate() alone would leave its ffmpeg renders running."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                       capture_output=True, creationflags=NO_WINDOW)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 class Job:
     """
     Tracks one process at a time. Rendering saturates the CPU and GPU, so a second
@@ -104,6 +119,7 @@ class Job:
         self.progress = {}
         self.eta = None
         self.stopped = False
+        self.closed = False
 
     @property
     def running(self):
@@ -116,7 +132,7 @@ class Job:
 
     def start(self, argv, env=None, keep_log=False):
         with self.lock:
-            if not self.idle:
+            if self.closed or not self.idle:
                 return False
             eta = RunEta(argv, env, STAGE_TIMINGS)
             process = subprocess.Popen(
@@ -210,24 +226,28 @@ class Job:
 
     def stop(self):
         """
-        Kills the run and every process it started: terminate() alone would
-        leave its ffmpeg renders running.
+        Kills the process and everything it started, and waits for it to go.
+        False if nothing was running, or if it survived: then `running` stays True.
         """
         with self.lock:
             if not self.running:
                 return False
             self.stopped = True
             pid = self.process.pid
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                               capture_output=True, creationflags=NO_WINDOW)
-            else:
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            kill_tree(pid)
+            try:
+                self.process.wait(timeout=STOP_WAIT)
+            except subprocess.TimeoutExpired:
+                self.stopped = False
+                self.log(f"⚠️ Could not stop process {pid}.")
+                return False
             self.log("🛑 Stopped by user.")
         return True
+
+    def close(self):
+        """Nothing starts from here on, so a job can't slip in while the server shuts down."""
+        with self.lock:
+            self.closed = True
 
     @property
     def uploading(self):
@@ -239,6 +259,7 @@ class Job:
             "running": self.running,
             "lines": list(self.lines),
             "returncode": self.returncode,
+            "stopped": self.stopped,
             "command": self.command,
             "started_at": self.started_at.strftime("%H:%M:%S") if self.started_at else None,
             "elapsed": int(((self.finished_at or datetime.now()) - self.started_at).total_seconds()) if self.started_at else 0,
@@ -353,6 +374,13 @@ class JobQueue:
             self._advance()
             return removed
 
+    def close(self):
+        """Drops what is waiting and lets nothing start again. The running job is the caller's to stop."""
+        with self.lock:
+            self.items = []
+            self.held = False
+            self.job.close()
+
     def pending(self):
         """Every job not finished yet, the running one included."""
         with self.lock:
@@ -431,6 +459,7 @@ def lan_ip():
 _comfyui_cache = {"at": 0.0, "online": False}
 _comfyui_start_lock = threading.Lock()
 _comfyui_start_requested_at = 0.0
+_comfyui_process = None  # Only one this server started
 # Seconds a run waits for a ComfyUI that Generate just launched to load its models.
 COMFYUI_STARTUP_WAIT = 180
 
@@ -577,21 +606,43 @@ def comfyui_launcher():
     return path if path and os.path.exists(path) else None
 
 
-def interrupt_comfyui():
+def cancel_pipeline_clips():
     """
-    Cancels the avatar clip ComfyUI is rendering for a stopped run, and any
-    queued after it. ComfyUI itself keeps running, with its models loaded for
-    the next run.
+    Cancels the avatar clips ComfyUI has for a stopped run, rendering or waiting.
+    Only the pipeline's, by client id: a render you started in ComfyUI yourself
+    carries on. ComfyUI itself keeps running, with its models loaded for the next run.
     """
-    if not (comfy_monitor and comfy_monitor.snapshot().get("active")):
-        return
     url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+    client_id = os.getenv("COMFYUI_CLIENT_ID") or COMFYUI_CLIENT_ID
     try:
-        # Clear the queue first, or the next queued clip starts as soon as this one stops.
-        requests.post(f"{url}/queue", json={"clear": True}, timeout=5)
-        requests.post(f"{url}/interrupt", timeout=5)
-    except requests.RequestException:
-        pass
+        queue = requests.get(f"{url}/queue", timeout=5).json()
+        waiting = [entry[1] for entry in queue.get("queue_pending", []) if entry[3].get("client_id") == client_id]
+        # Waiting ones first, or the next clip starts as soon as this one stops.
+        if waiting:
+            requests.post(f"{url}/queue", json={"delete": waiting}, timeout=5)
+        for entry in queue.get("queue_running", []):
+            if entry[3].get("client_id") == client_id:
+                requests.post(f"{url}/interrupt", json={"prompt_id": entry[1]}, timeout=5)
+    except requests.ConnectionError:
+        pass  # ComfyUI isn't running, so it has nothing to cancel
+    except (requests.RequestException, ValueError, LookupError, AttributeError) as e:
+        job.log(f"⚠️ Could not cancel the ComfyUI clip, it may keep rendering: {e}")
+
+
+def remove_partial_videos():
+    """A stitch that gets killed leaves its unfinished file behind in the output folder."""
+    try:
+        for name in os.listdir(OUTPUT_DIR):
+            if name.endswith(".part"):
+                os.remove(os.path.join(OUTPUT_DIR, name))
+    except OSError as e:
+        job.log(f"⚠️ Could not remove the unfinished video: {e}")
+
+
+def close_comfyui():
+    """Closes ComfyUI if this server started it. One you started yourself isn't the panel's to close."""
+    if _comfyui_process and _comfyui_process.poll() is None:
+        kill_tree(_comfyui_process.pid)
 
 
 def comfyui_command(launcher):
@@ -614,18 +665,20 @@ def comfyui_command(launcher):
 def launch_comfyui(launcher):
     """
     Starts ComfyUI in its own minimised console window, so it can be watched
-    (or closed to stop it) and outlives this server. (Not 'start': it only takes
-    a quoted first argument as the window title and would open a folder named ComfyUI.)
+    (or closed to stop it) and outlives a server restarting for new code; Shut
+    down closes it. (Not 'start': it only takes a quoted first argument as the
+    window title and would open a folder named ComfyUI.)
     """
+    global _comfyui_process
     command = comfyui_command(launcher)
     if os.name != "nt":
-        subprocess.Popen(command or [launcher], shell=bool(command),
-                         cwd=os.path.dirname(launcher), start_new_session=True)
+        _comfyui_process = subprocess.Popen(command or [launcher], shell=bool(command),
+                                            cwd=os.path.dirname(launcher), start_new_session=True)
         return
     startup = subprocess.STARTUPINFO()
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimised, without stealing focus
-    subprocess.Popen(
+    _comfyui_process = subprocess.Popen(
         f"cmd /c {command}" if command else ["cmd", "/c", launcher],
         cwd=os.path.dirname(launcher),
         creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -721,6 +774,18 @@ QUEUES = {"run": run_queue, "upload": upload_queue}
 
 def work_left():
     return job.running or uploads.running or run_queue.pending() or upload_queue.pending()
+
+
+def stop_run():
+    """Kills the run with its ffmpeg renders and ComfyUI clips. What is queued waits for Resume."""
+    # Before the kill, or the next job could start as soon as this one dies.
+    if job.running:
+        run_queue.hold()
+    stopped = job.stop()
+    if stopped:
+        cancel_pipeline_clips()
+        remove_partial_videos()
+    return stopped
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -915,13 +980,7 @@ def check():
 @app.route("/stop", methods=["POST"])
 @password_required
 def stop():
-    # Before the kill, or the next job could start as soon as this one dies.
-    if job.running:
-        run_queue.hold()
-    stopped = job.stop()
-    if stopped:
-        interrupt_comfyui()
-    return {"ok": stopped}
+    return {"ok": stop_run(), "error": STOP_FAILED if job.running else None}
 
 
 @app.route("/publish/stop", methods=["POST"])
@@ -929,7 +988,7 @@ def stop():
 def stop_upload():
     if uploads.running:
         upload_queue.hold()
-    return {"ok": uploads.stop()}
+    return {"ok": uploads.stop(), "error": STOP_FAILED if uploads.running else None}
 
 
 @app.route("/queue/<lane>/remove/<int:item_id>", methods=["POST"])
@@ -952,9 +1011,18 @@ def queue_resume(lane):
 @app.route("/shutdown", methods=["POST"])
 @password_required
 def shutdown():
-    """Stops the server itself: started from start_webapp.pyw it has no window to close."""
-    if work_left():
-        return {"ok": False, "error": "A run or upload is in progress or queued. Stop it and empty the queue first."}, 409
+    """
+    Force-stops everything the panel is doing, then the server itself: started
+    from start_webapp.pyw it has no window to close.
+    """
+    for queue in QUEUES.values():
+        queue.close()
+    stop_run()
+    uploads.stop()
+    # Exiting now would leave it running with nothing in the panel to stop it.
+    if job.running or uploads.running:
+        return {"ok": False, "error": f"{STOP_FAILED} Then shut down again."}, 500
+    close_comfyui()
     # Reply first, then exit, so the browser gets its answer.
     threading.Timer(0.5, os._exit, args=(0,)).start()
     return {"ok": True}

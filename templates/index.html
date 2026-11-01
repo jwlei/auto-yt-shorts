@@ -210,7 +210,7 @@
     <p class="sub">Pick your options, press Generate, and watch it work. Queue more while it runs. Finished videos wait under Ready until you upload them.</p>
   </div>
   <div style="display:flex;gap:14px;align-items:center">
-    <a href="#" id="shutdown" title="Stops the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
+    <a href="#" id="shutdown" title="Force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
     {% if protected %}<a href="{{ url_for('logout') }}">Sign out</a>{% endif %}
   </div>
 </div>
@@ -818,11 +818,12 @@ const renderUploadLog = logWriter($('uploadLog'), () => true);
 
 function renderUpload(up) {
   $('uploadBox').hidden = !up.lines.length && !up.queue.items.length;
-  $('uploadDot').className = 'dot' + (up.running ? ' on' : (up.returncode ? ' fail' : up.started_at ? ' ok' : ''));
+  $('uploadDot').className = 'dot' + (up.running ? ' on' : up.stopped ? '' : (up.returncode ? ' fail' : up.started_at ? ' ok' : ''));
   $('stopUpload').hidden = !up.running;
   $('uploadStatus').textContent = up.running ? `Uploading · ${fmt(up.elapsed)} so far`
     : up.queue.items.length && !up.queue.held ? 'Waiting to upload'
     : !up.started_at ? ''
+    : up.stopped ? 'Upload stopped'
     : up.returncode === 0 ? 'Upload finished ✔' : `Upload failed (exit ${up.returncode})`;
   renderQueue($('uploadQueue'), up.queue, 0);
   if (up.lines.length) renderUploadLog(up.lines);
@@ -864,7 +865,7 @@ for (const id of ['runQueue', 'uploadQueue']) {
 }
 
 // --- Status polling ---
-let wasRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
+let wasRunning = false, uploadRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
 async function poll() {
   let data;
   try {
@@ -890,10 +891,11 @@ async function poll() {
   renderPlan();  // The clock has moved on
   uploadingNow = new Set(upq.current ? upq.current.videos : []);
   uploadQueued = new Set(upq.items.flatMap(item => item.videos));
-  busy = data.upload.running || uploadsQueued > 0 || (running && (data.progress.stage || [])[2] === 'Upload');
+  uploadRunning = data.upload.running;
+  busy = uploadRunning || uploadsQueued > 0 || (running && (data.progress.stage || [])[2] === 'Upload');
   renderUpload(data.upload);
   renderQueue($('runQueue'), queue, queue.held ? 0 : queueAhead);
-  $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode ? ' fail' : ''));
+  $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode && !data.stopped ? ' fail' : ''));
   $('go').disabled = submitting;
   $('check').hidden = running;
   $('check').disabled = submitting;
@@ -910,6 +912,8 @@ async function poll() {
     $('statusText').textContent = `Running${run} · ${fmt(data.elapsed)} so far (started ${data.started_at})${eta}`;
   } else if (nextUp) {
     $('statusText').textContent = 'Starting the next job in the queue…';
+  } else if (data.stopped) {
+    $('statusText').textContent = 'Stopped';
   } else if (data.returncode === 0) {
     $('statusText').textContent = 'Finished ✔';
   } else if (data.returncode !== null) {
@@ -970,23 +974,29 @@ async function startJob(url) {
 }
 $('form').addEventListener('submit', e => { e.preventDefault(); saveForm(); startJob('/generate'); });
 $('check').addEventListener('click', () => startJob('/check'));
+async function stopJob(url) {
+  const body = await (await fetch(url, { method: 'POST' })).json();
+  if (body.error) alert(body.error);
+  poll();
+}
 $('stop').addEventListener('click', async () => {
   const held = runsQueued ? ` The ${runsQueued} queued after it will wait until you press Resume.` : '';
-  if (!confirm(`Stop the current run? This kills it and its ffmpeg renders, and cancels the ComfyUI clip it is rendering.${held}`)) return;
-  await fetch('/stop', { method: 'POST' });
-  poll();
+  if (!confirm(`Stop the current run? This kills it and its ffmpeg renders, and cancels its ComfyUI clips.${held}`)) return;
+  await stopJob('/stop');
 });
 
 $('stopUpload').addEventListener('click', async () => {
   const held = uploadsQueued ? ` The ${uploadsQueued} queued after it will wait until you press Resume.` : '';
   if (!confirm(`Stop the upload? A video that has not finished sending stays in Ready.${held}`)) return;
-  await fetch('/publish/stop', { method: 'POST' });
-  poll();
+  await stopJob('/publish/stop');
 });
 
 $('shutdown').addEventListener('click', async e => {
   e.preventDefault();
-  if (!confirm('Shut down the control panel? Start it again with start_webapp.pyw or the AutoShorts shortcut.')) return;
+  const queued = runsQueued + uploadsQueued;
+  const work = [wasRunning && 'force-stops the run in progress', uploadRunning && 'force-stops the upload in progress',
+    queued && `drops ${queued} queued ${queued === 1 ? 'job' : 'jobs'}`, 'closes ComfyUI if the panel started it'].filter(Boolean);
+  if (!confirm(`Shut down the control panel? This ${work.join(', ')}. Start it again with start_webapp.pyw or the AutoShorts shortcut.`)) return;
   const body = await (await fetch('/shutdown', { method: 'POST' })).json();
   if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }
   document.body.innerHTML = '<div class="wrap"><h1>Auto YT Shorts</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>AutoShorts</b> shortcut.</p></div>';
