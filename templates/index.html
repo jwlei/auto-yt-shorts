@@ -302,6 +302,7 @@
         <select id="workflow" name="workflow">
           <option value="">Built-in LTX, by Style</option>
         </select>
+        <button type="button" class="ghost" id="comfyStart" title="Only ComfyUI can list what's saved in it. Generate also starts it, and Shut down closes it." hidden>Start ComfyUI</button>
         <div class="hint" id="workflowHint">The workflows you saved in ComfyUI, which replace Style. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. She only lip-syncs in one with a Load Audio node.</div>
         <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
       </div>
@@ -485,15 +486,23 @@ async function loadWorkflows() {
   if (select.dataset.key === key) return;
   const wanted = select.dataset.key ? select.value : rememberedWorkflow();
   select.dataset.key = key;
+  const none = !data.online && !data.workflows.length;
   select.innerHTML = '<option value="">Built-in LTX, by Style</option>' + data.workflows.map(w =>
-    `<option value="${esc(w.name)}" ${w.problem ? 'disabled' : ''}>${esc(w.label)}${w.problem ? " (can't run)" : ''}</option>`).join('');
+    `<option value="${esc(w.name)}" ${w.problem ? 'disabled' : ''}>${esc(w.label)}${w.problem ? " (can't run)" : ''}</option>`).join('')
+    + (none ? '<option disabled>Your saved workflows appear once ComfyUI is on</option>' : '');
   if (data.workflows.some(w => w.name === wanted && !w.problem)) select.value = wanted;
-  const off = data.online ? '' : ' ComfyUI is off, so this lists the ones it had last time.';
+  const off = data.online ? '' : none ? " ComfyUI is off and the panel hasn't seen it on yet, so it has none to list. Start it once and they stay listed after it closes."
+    : ' ComfyUI is off, so this lists the ones it had last time.';
   const stuck = data.workflows.filter(w => w.problem).map(w => ` ${w.label} can't run: ${w.problem}`).join('');
   $('workflowHint').textContent = WORKFLOW_HINT + off + stuck;
   syncForm();
 }
 $('workflow').addEventListener('focus', loadWorkflows);
+$('comfyStart').addEventListener('click', async () => {
+  $('comfyStart').hidden = true;
+  const body = await (await fetch('/comfyui/start', { method: 'POST' })).json();
+  if (!body.ok) alert(body.error);
+});
 
 function syncForm() {
   $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
@@ -995,6 +1004,7 @@ async function poll() {
 
   const c = data.comfyui;
   if (c.online !== workflowsFor) { workflowsFor = c.online; loadWorkflows(); }
+  $('comfyStart').hidden = c.online || c.starting || !c.can_start;
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : 'fail');
   $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running'
     : c.starting ? 'starting… (loading models)'

@@ -731,10 +731,14 @@ def start_comfyui_for_run(form):
     Starts ComfyUI for avatar runs when a launcher is configured. Returns True
     when ComfyUI is (still) booting, so the run should wait for it.
     """
-    global _comfyui_start_requested_at
     if (form.get("avatar_source") or "comfyui") != "comfyui" or (form.get("avatar_clips") or "auto") == "0":
         return False
+    return start_comfyui()
 
+
+def start_comfyui():
+    """Starts ComfyUI if a launcher is configured. Returns True when it is (still) booting."""
+    global _comfyui_start_requested_at
     with _comfyui_start_lock:
         _comfyui_cache["at"] = 0.0
         if comfyui_online():
@@ -1247,6 +1251,17 @@ def status():
 def workflows():
     found = [{key: w[key] for key in ("name", "label", "problem") if key in w} for w in saved_workflows()]
     return {"online": comfyui_online(), "workflows": found}
+
+
+@app.route("/comfyui/start", methods=["POST"])
+@password_required
+def comfyui_start():
+    """Only ComfyUI can list what's saved in it, and a run would only start it once one is under way."""
+    try:
+        start_comfyui()
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
 
 
 @app.route("/videos/<folder>/<path:name>")
