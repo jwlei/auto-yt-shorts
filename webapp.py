@@ -35,7 +35,6 @@ from dotenv import load_dotenv
 from flask import (Flask, abort, redirect, render_template, request,
                    send_file, session, url_for)
 
-from modules.api_log import quota_day, summarize_api_error
 from modules.avatar_generator import COMFYUI_CLIENT_ID, avatar_clip_range, on_screen_range
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
@@ -55,7 +54,6 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # How long a killed process gets to disappear before it counts as surviving.
 STOP_WAIT = 10
 STOP_FAILED = "It could not be stopped. End it in Task Manager (python.exe)."
-API_ERROR_LOG = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
 # start_webapp.pyw compares this with the code on disk to replace a server that
 # predates an update (templates are cached and Python only loads at start).
 STARTED_AT = time.time()
@@ -197,6 +195,7 @@ class Job:
         ("clip", re.compile(r"Clip (\d+)/(\d+) \u00b7 scene (\d+): (\d+)s ([\w-]+)")),
         ("rejected", re.compile(r"Rejected: (.*) \(attempt (\d+)/(\d+)\)")),
         ("render", re.compile(r"Processing Scene (\d+)")),
+        ("upload", re.compile(r"\U0001f4fc (\d+)/(\d+): (.+)")),
     ]
 
     def _track(self, line):
@@ -227,6 +226,8 @@ class Job:
                 total = p.get("scenes")
                 p["detail"] = f"Scene {m.group(1)}" + (f" of {total}" if total else "")
                 self.eta.scene()
+            elif kind == "upload":
+                p["upload"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
             return
 
     def stop(self):
@@ -757,28 +758,6 @@ def start_comfyui():
         return True
 
 
-def recent_api_errors(count=12):
-    """The latest errors since the quota reset: an older "daily limit reached" no longer applies."""
-    try:
-        with open(API_ERROR_LOG, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-count:]
-    except OSError:
-        return []
-    today = quota_day()
-    errors = []
-    for line in reversed(lines):
-        parts = line.rstrip("\n").split("\t")
-        if len(parts) >= 5:
-            try:
-                if quota_day(datetime.fromisoformat(parts[0])) != today:
-                    continue
-            except ValueError:
-                continue
-            errors.append({"when": parts[0].replace("T", " "), "service": parts[1], "model": parts[2],
-                           "status": parts[3], "message": summarize_api_error(parts[4])})
-    return errors
-
-
 _quota_cache = {"at": 0.0, "value": None}
 
 
@@ -1241,7 +1220,6 @@ def status():
                           "starting": not online and time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT,
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
-    payload["api_errors"] = recent_api_errors()
     payload["quota"] = cached_quota()
     return payload
 
@@ -1249,7 +1227,7 @@ def status():
 @app.route("/api/workflows")
 @password_required
 def workflows():
-    found = [{key: w[key] for key in ("name", "label", "problem") if key in w} for w in saved_workflows()]
+    found = [{key: w[key] for key in ("name", "label")} for w in saved_workflows() if "problem" not in w]
     return {"online": comfyui_online(), "workflows": found}
 
 

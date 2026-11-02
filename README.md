@@ -135,7 +135,7 @@ She stays on screen for a random 3-6 seconds each time (`AVATAR_MIN_SECONDS`/`MA
 
 - `comfyui/avatar_lipsync.json` (default) is the workflow in API format (ComfyUI → Workflow → **Export (API)**): LTX-2.3 I2V/T2V plus three nodes that load the narration, encode it, and mask it so the audio is kept and only the video is generated.
 - `comfyui/avatar_workflow.json` is the same workflow without lip-sync: the presenter reacts silently while the narration plays over her. Point `COMFYUI_WORKFLOW` at it to use it.
-- **ComfyUI workflow** in the panel lists what you saved in ComfyUI, and replaces Style when you pick one. The default, **LTX-2.3**, is the built-in workflow, as before; your saved `LTX-2.3_-_I2V_T2V_Basic_GGUF` isn't listed, since the built-in is that plus the narration. The panel converts each one to API format and finds its inputs from the graph (the conversions sit in `logs/workflows/`, so they stay listed with ComfyUI off; until the panel has seen ComfyUI on once it has none to list, and **Start ComfyUI** under the list starts it). One that can't run is greyed out, and the hint says why: no Load Audio node feeding the video, a model or node that isn't installed, or subgraphs. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. A continued run keeps its workflow. A saved `SaveVideo` becomes VideoHelperSuite's Video Combine, to keep clips out of ComfyUI's `output` folder.
+- **ComfyUI workflow** in the panel lists what you saved in ComfyUI, and replaces Style when you pick one. The default, **LTX-2.3**, is the built-in workflow, as before. The panel converts each one to API format and finds its inputs from the graph (the conversions sit in `logs/workflows/`, so they stay listed with ComfyUI off; until the panel has seen ComfyUI on once it has none to list, and **Start ComfyUI** under the list starts it). The list only has workflows whose name ends in `_ytautoshort`, tuned for this pipeline. One of those that can't run isn't listed, and `logs/workflows/not_listed.json` says why: no Load Audio node feeding the video, a model or node that isn't installed, or subgraphs. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. A continued run keeps its workflow. A saved `SaveVideo` becomes VideoHelperSuite's Video Combine, to keep clips out of ComfyUI's `output` folder.
 - Each `.map.json` says which node inputs to fill, as `"<node id>.<input>"`: `prompt` (required), `image`, `audio` (turns on lip-sync), `text_to_video`, `seconds`, `width`, `height`. Seeds are randomised automatically. If you swap in another workflow, update the map to match.
 - Clips stay out of ComfyUI's `output` folder: any `save_output` input is switched off when a clip is queued, so ComfyUI saves it to its `temp` folder (which it wipes on every start) and the pipeline downloads it from there. Nothing is ever deleted from `output`, and renders you start in ComfyUI yourself save as usual. A swapped-in workflow must use a save node with `save_output`, such as Video Combine.
 
@@ -220,14 +220,17 @@ Schedule a daily short with cron:
 
 `webapp.py` is the control panel for the whole pipeline, on the desktop or your
 phone: every option (topic, number of videos, language, voice, avatar layout and
-style, YouTube upload and privacy, advanced flags) with a hint under each, a
-"Check setup" button, a live log, ComfyUI status, recent API errors, and a
+style, YouTube upload and privacy, advanced flags), a
+"Check setup" button, a live log, ComfyUI status, and a
 carousel of the videos in `0_output` (Ready) and `1_uploaded` (Uploaded). Each
 ready video has **Upload** and **Delete**; **Upload all** sends every ready video
 (uploads use the privacy picked under Publish, public by default). **Open folder** shows
 the tab's folder in File Explorer; it's only there on this PC, not on your phone. On a desktop at least 1280px
 wide the options, the run card (Generate, ComfyUI, progress, log) and the
 portrait videos sit in three columns on one screen.
+
+On a phone a header stays on top with Options, Run (with a short status), Queue, Log, Quota
+and Videos, and a small progress bar under it while a run or upload is going.
 
 Before a run, the panel estimates how long it will take from the options you have
 set, and updates as you change them: videos, avatar layout and source, clips per
@@ -240,7 +243,7 @@ the estimates start rough and get better with each run. Renders are timed per vi
 as they differ by far: one not timed yet goes by the average of all models, and the panel
 says so, until its first clip is done. Delete that file to start over.
 
-The left column lists today's quota per model: Gemini text and voice models, the stock
+The Quota section lists today's quota per model: Gemini text and voice models, the stock
 provider and YouTube upload units. Google has no API for what is left of a quota, so
 Gemini and YouTube are counted from this app's own successful calls
 (`logs/api_usage.jsonl`), and a daily-limit error from Google marks a model as used up,
@@ -248,7 +251,7 @@ with the limit it states replacing the free-tier figure, until a later call to t
 gets through. Calls from other apps on the same key aren't counted. Stock figures come from
 the provider's response headers.
 
-Gemini and YouTube counts, limit-hit marks and the panel's API error list all start over at
+Gemini and YouTube counts and limit-hit marks start over at
 midnight Pacific, when Google resets its quotas, whatever the local time is. A batch
 running past that moment tries its used-up models again. The log files keep the full history.
 

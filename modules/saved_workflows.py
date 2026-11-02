@@ -23,8 +23,8 @@ SEED_CONTROLS = ("fixed", "increment", "decrement", "randomize")
 # Latent video comes in 4n+1 frames.
 FRAME_STEP = 4
 PROMPT_INPUTS = ("text", "prompt", "value")
-# The built-in workflow is this one plus the narration: two LTX entries only invite picking the one that can't lip-sync.
-HIDDEN = ("LTX-2.3_-_I2V_T2V_Basic_GGUF.json",)
+# Tuned for this pipeline, and all it offers: the rest of what's saved in ComfyUI isn't for it.
+OWN_SUFFIX = "_ytautoshort"
 # SaveVideo always writes to ComfyUI's output folder, which the pipeline stays out of.
 COMBINE = "VHS_VideoCombine"
 COMBINE_DEFAULTS = {"loop_count": 0, "filename_prefix": "pipeline", "format": "video/h264-mp4", "pix_fmt": "yuv420p",
@@ -320,6 +320,10 @@ def _label(name):
     return name[:-5] if name.lower().endswith(".json") else name
 
 
+def _is_own(name):
+    return _label(name).endswith(OWN_SUFFIX)
+
+
 def _file_stem(name):
     return re.sub(r"[^\w.-]+", "_", _label(name))
 
@@ -340,7 +344,7 @@ def _from_comfyui(url, folder):
     info = requests.get(f"{url}/object_info", timeout=60).json()
     os.makedirs(folder, exist_ok=True)
     found = []
-    for name in sorted(n for n in names if n.lower().endswith(".json") and n not in HIDDEN):
+    for name in sorted(n for n in names if n.lower().endswith(".json") and _is_own(n)):
         entry = {"name": name, "label": _label(name)}
         try:
             response = requests.get(f"{url}/api/userdata/{quote('workflows/' + name, safe='')}", timeout=10)
@@ -355,6 +359,8 @@ def _from_comfyui(url, folder):
             entry["problem"] = f"Couldn't read it ({e})."
         found.append(entry)
     _forget_deleted(folder, names)
+    # The panel only offers what runs, so this is where to find out why one isn't there.
+    _write_json(os.path.join(folder, "not_listed.json"), {entry["label"]: entry["problem"] for entry in found if "problem" in entry})
     return found
 
 
@@ -382,7 +388,7 @@ def _from_earlier(folder):
                 name = fields["_saved_as"]
             except (OSError, ValueError, KeyError):
                 continue
-            if os.path.exists(path) and "audio" in fields:
+            if os.path.exists(path) and "audio" in fields and _is_own(name):
                 found.append({"name": name, "label": _label(name), "path": path, "takes": takes(fields)})
     return found
 

@@ -23,10 +23,8 @@
   .estimate .err { margin: 0; }
   .eta-detail .changes { max-height: 7.5em; overflow-y: auto; margin-top: 2px; }
   #uploadBox .status { margin-bottom: 8px; }
-  #uploadBox .log { max-height: 130px; margin-bottom: 12px; }
   #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
   .queue { margin-top: 12px; font-size: .84rem; }
-  #uploadQueue { margin: 0 0 12px; }
   .queue-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; margin-bottom: 4px; }
   .queue-head b { font-weight: 600; }
   .queue-head .when { color: var(--muted); font-size: .78rem; }
@@ -124,10 +122,6 @@
   .top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
   .top .sub { margin-bottom: 6px; }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
-  .apierr { font-size: .78rem; border-top: 1px solid var(--line); padding: 8px 0; word-break: break-word; }
-  .apierr:first-child { border-top: 0; }
-  .apierr .when { color: var(--muted); }
-  .apierr .code { color: var(--err); font-weight: 600; }
   .hidden { display: none !important; }
   .dashboard { display: flex; flex-direction: column; }
   .stepper { display: flex; gap: 4px; margin: 2px 0 12px; }
@@ -151,25 +145,38 @@
   .q-row.low .q-bar > div { background: #f2b84b; }
   .q-row.out .q-val { color: var(--err); }
   .q-row.out .q-bar > div { background: var(--err); }
-  /* Phones: the page is one long column, so this stays on top to get around it. */
-  .jump {
+  /* Phones: the page is one long column, so this stays on top to get around it and say what is going on. */
+  .stick {
     position: sticky; top: 0; z-index: 10;
-    display: flex; gap: 6px;
-    margin: 0 -16px 12px; padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+    margin: 0 -16px 12px; padding-top: env(safe-area-inset-top);
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
+  .jump { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 5px; padding: 6px 16px; }
   .jump a {
-    flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px;
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
-    color: var(--muted); font-size: .85rem; font-weight: 600; text-decoration: none; white-space: nowrap;
+    grid-column: span 3; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+    color: var(--muted); font-size: .76rem; font-weight: 600; text-decoration: none; white-space: nowrap;
   }
+  .jump a.options { grid-column: span 4; }
+  .jump a.run { grid-column: span 8; }
   .jump a.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
-  .dashboard > .card { scroll-margin-top: calc(72px + env(safe-area-inset-top)); }
-  /* Desktop: options (two columns), the run card (Generate, ComfyUI, progress,
-     log) and, from 1280px, the portrait videos on the far right, all on one
+  .jump small { font-size: .74rem; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+  .strip { padding: 0 16px 7px; font-size: .78rem; }
+  .strip-head { display: flex; justify-content: space-between; gap: 10px; }
+  .strip-head b { font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .strip-head span { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .strip .bar { height: 3px; margin-top: 4px; }
+  .strip .hint { margin-top: 3px; font-size: .72rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* How far along can't be told: it says it's working, not how much is done. */
+  .bar.busy > div { animation: slide 1.4s ease-in-out infinite; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  .dashboard .card { scroll-margin-top: calc(var(--head, 110px) + 8px); }
+  .card > .section-title:first-child { margin-top: 0; }
+  /* Desktop: options (two columns), the run, queue, log and
+     quota cards and, from 1280px, the portrait videos on the far right, all on one
      screen. Narrower desktops put the videos underneath. Phones keep one column. */
   @media (min-width: 1000px) {
-    .jump { display: none; }
+    .stick { display: none; }
     .wrap { max-width: 1880px; padding: 14px 20px 20px; }
     .top { align-items: baseline; margin-bottom: 12px; }
     .top .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
@@ -181,25 +188,16 @@
       gap: 16px;
     }
     .dashboard > .card { margin-bottom: 0; min-width: 0; }
+    .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .side > .card { margin-bottom: 0; }
     .videos-card { grid-column: 1 / -1; }
     .vid { flex-basis: 260px; }
-    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto 1fr; gap: 0 22px; }
-    #form > .form-col:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
-    #formQuota { grid-column: 1; grid-row: 2; }
+    #form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
     #form input:not([type=checkbox]), #form select { padding: 9px 11px; font-size: .95rem; }
     #form label { margin: 9px 0 4px; }
     #form .section { margin-top: 12px; }
     #form .form-col > .section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
     #form .section-title { margin-top: 10px; }
-    .run-card {
-      position: sticky;
-      top: 14px;
-      display: flex;
-      flex-direction: column;
-      max-height: calc(100vh - 28px);
-      overflow: auto;
-    }
-    .run-card .log { flex: 1 1 auto; min-height: 120px; max-height: none; }
   }
   @media (min-width: 1280px) {
     .wrap { height: 100vh; display: flex; flex-direction: column; }
@@ -211,7 +209,8 @@
       align-items: stretch;
     }
     .dashboard > .card { overflow: auto; }
-    .run-card { position: static; max-height: none; }
+    .side { overflow: auto; min-height: 0; }
+    .side > .card { flex: none; }
     .videos-card { grid-column: auto; display: flex; flex-direction: column; overflow: hidden !important; }
     .carousel { flex: 1; min-height: 0; }
     .vid { flex-basis: 100%; }
@@ -222,7 +221,7 @@
 <div class="top">
   <div class="title">
     <h1>🎬 Auto YT Shorts</h1>
-    <p class="sub">Pick your options, press Generate, and watch it work. Queue more while it runs. Finished videos wait under Ready until you upload them.</p>
+    <p class="sub">Pick options, press Generate. Finished videos wait under Ready.</p>
   </div>
   <div style="display:flex;gap:14px;align-items:center">
     <a href="#" id="shutdown" title="Force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the AutoShorts shortcut.">Shut down</a>
@@ -230,11 +229,26 @@
   </div>
 </div>
 
-<nav class="jump" id="jump" aria-label="Sections">
-  <a href="#form">Options</a>
-  <a href="#runCard"><span class="dot" id="jumpDot"></span>Run</a>
-  <a href="#videosCard">Videos (<span id="jumpCount">0</span>)</a>
-</nav>
+<div class="stick" id="stick">
+  <nav class="jump" id="jump" aria-label="Sections">
+    <a href="#form" class="options">Options</a>
+    <a href="#runCard" class="run"><span class="dot" id="jumpDot"></span>Run<small id="jumpRun">Idle</small></a>
+    <a href="#queueCard">Queue (<span id="jumpQueue">0</span>)</a>
+    <a href="#logCard">Log</a>
+    <a href="#quotaCard">Quota</a>
+    <a href="#videosCard">Videos (<span id="jumpCount">0</span>)</a>
+  </nav>
+  <div class="strip" id="runStrip" hidden>
+    <div class="strip-head"><b id="runStripText"></b><span id="runStripRight"></span></div>
+    <div class="bar"><div id="runStripBar"></div></div>
+    <div class="hint" id="runStripHint"></div>
+  </div>
+  <div class="strip" id="uploadStrip" hidden>
+    <div class="strip-head"><b id="uploadStripText"></b><span id="uploadStripRight"></span></div>
+    <div class="bar"><div id="uploadStripBar"></div></div>
+    <div class="hint" id="uploadStripHint"></div>
+  </div>
+</div>
 
 <div class="dashboard">
 <form class="card" id="form">
@@ -244,7 +258,7 @@
 
       <label for="topic">Topic</label>
       <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
-      <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you. Topics of videos already made are never repeated (<code>logs/generated_topics.jsonl</code>). Discarding a stopped run or deleting a video from Ready frees its topic.</div>
+      <div class="hint">Leave empty for an AI pick. Topics already made aren't repeated.</div>
 
       <div class="row">
         <div>
@@ -259,7 +273,6 @@
           </select>
         </div>
       </div>
-      <div class="hint">The free Gemini tier voices about <b>10 videos a day</b> per voice model — a batch stops being voiced once both models hit their daily limit.</div>
     </div>
 
     <div class="section" id="formVoice">
@@ -268,7 +281,7 @@
       <select id="voice" name="voice">
         {% for value, label in voices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
       </select>
-      <div class="hint">Natural Gemini voices. If Gemini 3.8 Flash TTS is out of quota or slow, the same voice is used through 3.8 Flash Lite TTS. If both fail, the run stops — it never falls back to a robotic voice.</div>
+      <div class="hint">If both Gemini voice models fail, the run stops.</div>
     </div>
   </div>
 
@@ -282,7 +295,7 @@
         <option value="2">2 middle scenes only (2 clips)</option>
         <option value="0">No avatar — stock footage only</option>
       </select>
-      <div class="hint"><b>Auto</b> waits until the stock footage is downloaded, has Gemini rate how well each clip matches its line, and gives the presenter the scenes with the weakest footage. The opening (hook) scene is always her. Each video uses a random <code>assets/avatar/avatar*.jpg</code> as her look.</div>
+      <div class="hint"><b>Auto</b> gives her the opening and the scenes with the weakest stock footage.</div>
 
       <div id="avatarOpts">
         <div id="clipsSlider">
@@ -292,7 +305,6 @@
             <input type="range" name="avatar_clips_min" min="1" max="9" value="3" aria-label="Fewest clips per video">
             <input type="range" name="avatar_clips_max" min="1" max="9" value="5" aria-label="Most clips per video">
           </div>
-          <div class="hint">Each video picks a number in this range, towards the top when the stock footage is weak.</div>
         </div>
         <div class="range-head"><label>Clip length</label><output id="secondsText"></output></div>
         <div class="range" id="secondsRange">
@@ -300,7 +312,7 @@
           <input type="range" name="avatar_seconds_min" min="2" max="10" value="3" aria-label="Shortest clip in seconds">
           <input type="range" name="avatar_seconds_max" min="2" max="10" value="6" aria-label="Longest clip in seconds">
         </div>
-        <div class="hint">How long she stays on screen each time. A longer line then cuts to stock footage while her voice carries on.</div>
+        <div class="hint">A longer line cuts to stock footage while her voice carries on.</div>
         <div class="hint" id="avatarMix"></div>
 
         <div class="row">
@@ -323,9 +335,8 @@
         <select id="workflow" name="workflow">
           <option value="">LTX-2.3</option>
         </select>
-        <button type="button" class="ghost" id="comfyStart" title="Only ComfyUI can list what's saved in it. Generate also starts it, and Shut down closes it." hidden>Start ComfyUI</button>
-        <div class="hint" id="workflowHint">The workflows you saved in ComfyUI, which replace Style. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. Each needs a Load Audio node feeding the video, so she can lip-sync.</div>
-        <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
+        <button type="button" class="ghost" id="comfyStart" title="Only ComfyUI can list what's saved in it." hidden>Start ComfyUI</button>
+        <div class="hint" id="workflowHint">Replaces Style. Each needs a Load Audio node feeding the video.</div>
       </div>
     </div>
 
@@ -334,7 +345,6 @@
       <label class="check">
         <input type="checkbox" name="upload" id="upload">
         <span>Upload to YouTube when done
-          <div class="hint">Uploaded videos move from <code>0_output</code> to <code>1_uploaded</code>. Needs the YouTube keys in .env (run scripts/authorize_youtube.py once).</div>
         </span>
       </label>
       <label for="privacy">Privacy</label>
@@ -343,7 +353,7 @@
         <option value="unlisted">Unlisted — anyone with the link</option>
         <option value="private">Private — only you</option>
       </select>
-      <div class="hint">For uploads when a run finishes and for the Upload buttons under Ready. YouTube forces uploads from an unverified Google Cloud app to private, whatever you pick here.</div>
+      <div class="hint">YouTube forces uploads from an unverified Google app to private.</div>
     </div>
 
     <div class="section" id="formAdvanced">
@@ -351,31 +361,25 @@
         <summary>Advanced</summary>
         <label for="output">File name (single video only)</label>
         <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS_model.mp4" autocomplete="off">
-        <div class="hint">Leave empty for a timestamped name ending in the video model. Saved in <code>0_output</code>.</div>
 
         <label class="check">
           <input type="checkbox" name="fail_fast">
           <span>Stop the batch at the first failed video
-            <div class="hint">Otherwise a failed video is skipped and the batch carries on.</div>
           </span>
         </label>
         <label class="check">
           <input type="checkbox" name="keep_cache">
           <span>Keep intermediate files
-            <div class="hint">Keeps the voice clips, stock footage and avatar clips in <code>assets/</code> for debugging. Normally they are deleted after each video.</div>
+            <div class="hint">Normally deleted after each video.</div>
           </span>
         </label>
       </details>
     </div>
   </div>
 
-  <div class="section" id="formQuota">
-    <div class="section-title">Quota today</div>
-    <div id="quota"></div>
-    <div class="hint"><span id="quotaReset"></span> Google doesn't report what's left, so Gemini and YouTube are counted from this app's own calls; other apps on the same key aren't included. "Limit hit" comes from Google itself, and clears if a later call gets through. Stock footage figures come from the provider.</div>
-  </div>
 </form>
 
+<div class="side">
 <div class="card run-card" id="runCard">
   <div class="btns">
     <button type="button" class="ghost" id="check" title="Verifies keys, ffmpeg and ComfyUI for these options without making anything.">Check setup</button>
@@ -387,11 +391,9 @@
     <div id="estimateTotal"></div>
     <div class="hint" id="estimateDetail"></div>
   </div>
-  <div class="queue" id="runQueue" data-lane="run" hidden></div>
-  <div class="queue" id="stoppedRuns" hidden></div>
 
   <div class="run-sep"></div>
-  <div class="sys" title="ComfyUI renders the avatar clips on your GPU. Generate starts it (without its web page) when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env; otherwise start it yourself. Failed avatar renders fall back to stock footage.">
+  <div class="sys" title="Generate starts it when the run needs avatar clips and COMFYUI_LAUNCHER is set in .env.">
     <div class="item"><span class="dot" id="comfyDot"></span><span id="comfyText">ComfyUI: checking…</span></div>
   </div>
 
@@ -412,16 +414,37 @@
     </div>
   </div>
   <div class="hint gpu" id="gpuLine"></div>
-  <div class="log" id="log"><span class="empty-log">No run yet.</span></div>
-  <div id="apiCard" hidden>
-    <div class="run-sep"></div>
-    <details>
-      <summary>⚠️ API errors since the quota reset (<span id="apiCount">0</span>)</summary>
-      <div class="hint" style="margin-bottom:8px">Straight from Google's servers. "429 / per day" means that model's free daily quota is used up — it resets at midnight Pacific time, and this list starts over then. Full history: <code>logs/api_errors.log</code>.</div>
-      <div id="apiErrors"></div>
-    </details>
+  <div id="uploadBox" hidden>
+    <div class="status">
+      <span class="dot" id="uploadDot"></span>
+      <span id="uploadStatus"></span>
+      <button type="button" class="danger" id="stopUpload" hidden>Stop</button>
+    </div>
   </div>
-  <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
+  <div class="phone">📱 Phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
+</div>
+
+<div class="card" id="queueCard">
+  <div class="section-title">Queue</div>
+  <div class="hint" id="queueEmpty">Nothing waiting.</div>
+  <div class="queue" id="runQueue" data-lane="run" data-title="Runs" hidden></div>
+  <div class="queue" id="stoppedRuns" hidden></div>
+  <div class="queue" id="uploadQueue" data-lane="upload" data-title="Uploads" hidden></div>
+</div>
+
+<div class="card" id="logCard">
+  <div class="section-title">Log</div>
+  <div class="q-group">Generation</div>
+  <div class="log" id="log"><span class="empty-log">No run yet.</span></div>
+  <div class="q-group">Upload</div>
+  <div class="log" id="uploadLog"><span class="empty-log">No upload yet.</span></div>
+</div>
+
+<div class="card" id="quotaCard">
+  <div class="section-title">Quota today</div>
+  <div id="quota"></div>
+  <div class="hint"><span id="quotaReset"></span> Gemini and YouTube are counted from this app's own calls.</div>
+</div>
 </div>
 
 <div class="card videos-card" id="videosCard">
@@ -432,15 +455,6 @@
     </div>
     <button type="button" class="ghost" id="openFolder" title="Open this tab's folder in File Explorer." {% if not can_open_folders %}hidden{% endif %}>Open folder</button>
     <button type="button" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."{% endif %}>Upload all</button>
-  </div>
-  <div id="uploadBox" hidden>
-    <div class="status">
-      <span class="dot" id="uploadDot"></span>
-      <span id="uploadStatus"></span>
-      <button type="button" class="danger" id="stopUpload" hidden>Stop</button>
-    </div>
-    <div class="queue" id="uploadQueue" data-lane="upload" hidden></div>
-    <div class="log" id="uploadLog"></div>
   </div>
   <div class="carousel" id="videos"></div>
   <div class="cnav" id="cnav" hidden>
@@ -509,13 +523,11 @@ async function loadWorkflows() {
   select.dataset.key = key;
   const none = !data.online && !data.workflows.length;
   select.innerHTML = '<option value="">LTX-2.3</option>' + data.workflows.map(w =>
-    `<option value="${esc(w.name)}" ${w.problem ? 'disabled' : ''}>${esc(w.label)}${w.problem ? " (can't run)" : ''}</option>`).join('')
-    + (none ? '<option disabled>Your saved workflows appear once ComfyUI is on</option>' : '');
-  if (data.workflows.some(w => w.name === wanted && !w.problem)) select.value = wanted;
-  const off = data.online ? '' : none ? " ComfyUI is off and the panel hasn't seen it on yet, so it has none to list. Start it once and they stay listed after it closes."
-    : ' ComfyUI is off, so this lists the ones it had last time.';
-  const stuck = data.workflows.filter(w => w.problem).map(w => ` ${w.label} can't run: ${w.problem}`).join('');
-  $('workflowHint').textContent = WORKFLOW_HINT + off + stuck;
+    `<option value="${esc(w.name)}">${esc(w.label)}</option>`).join('')
+    + (none ? '<option disabled>Yours appear once ComfyUI is on</option>' : '');
+  if (data.workflows.some(w => w.name === wanted)) select.value = wanted;
+  const off = data.online ? '' : none ? ' Start ComfyUI once to list yours.' : ' ComfyUI is off: this is the last list.';
+  $('workflowHint').textContent = WORKFLOW_HINT + off;
   syncForm();
 }
 $('workflow').addEventListener('focus', loadWorkflows);
@@ -561,7 +573,7 @@ function syncSliders(moved) {
   const greatest = Math.round(high * Math.min(longest, TYPICAL_SCENE));
   const share = s => Math.min(100, Math.round(100 * s / TYPICAL_VIDEO));
   const span = (a, b) => a === b ? `${a}` : `${a}–${b}`;
-  $('avatarMix').innerHTML = `<b>About ${span(share(least), share(greatest))}% presenter</b> (${span(least, greatest)} s of a typical ${TYPICAL_VIDEO} s video), the rest stock footage.`;
+  $('avatarMix').innerHTML = `<b>About ${span(share(least), share(greatest))}% presenter</b>, the rest stock footage.`;
 }
 for (const id of ['clipsRange', 'secondsRange']) {
   $(id).addEventListener('input', e => syncSliders(e.target));
@@ -708,14 +720,15 @@ $('tabUploaded').onclick = () => setTab('uploaded');
 // --- What is happening right now ---
 const STAGES = ['Topic & script', 'Voice', 'Stock footage', 'Avatar clips', 'Rendering scenes', 'Stitching', 'Upload'];
 const STAGE_HINTS = {
-  'Topic & script': 'Gemini is picking the topic and writing the scenes.',
-  'Voice': 'Gemini TTS is reading the whole script in one take, then it is cut into scenes.',
-  'Stock footage': 'Downloading two stock clips per scene.',
-  'Avatar clips': 'Rating the stock footage, picking the presenter scenes, then ComfyUI generates each clip on your GPU — the slowest step.',
-  'Rendering scenes': 'ffmpeg is combining each scene’s footage with its voice.',
-  'Stitching': 'Joining the scenes with transitions into the final video.',
-  'Upload': 'Writing the title and description, then uploading to YouTube.',
+  'Topic & script': 'Gemini is writing the scenes.',
+  'Voice': 'Gemini is reading the script.',
+  'Stock footage': 'Downloading stock clips.',
+  'Avatar clips': 'Picking her scenes, then ComfyUI renders each clip.',
+  'Rendering scenes': 'Combining footage and voice.',
+  'Stitching': 'Joining the scenes.',
+  'Upload': 'Uploading to YouTube.',
 };
+const SHORT_STAGES = { 'Topic & script': 'Script', 'Stock footage': 'Footage', 'Avatar clips': 'Clips', 'Rendering scenes': 'Scenes' };
 function fmt(sec) {
   sec = Math.max(0, sec | 0);
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -778,8 +791,8 @@ function renderPlan() {
   const parts = [];
   if (plan.videos > 1) parts.push(`${plan.videos} videos, ${fmtEta(plan.video)} each`);
   parts.push(plan.clips
-    ? `${plan.clips} avatar ${plan.clips === 1 ? 'clip' : 'clips'} of about ${plan.clip_seconds} s per video, ${fmtEta(plan.clip_render)} each${plan.model ? ` on ${esc(plan.model)}` : ''}${plan.model && !plan.model_timed ? ` (not timed yet, so this is the average of all models until its first clip)` : ''}. A clip that fails its check renders again, which adds that time`
-    : 'No avatar clips to render');
+    ? `${plan.clips} ${plan.clips === 1 ? 'clip' : 'clips'} per video, ${fmtEta(plan.clip_render)} each${plan.model ? ` on ${plan.model}` : ''}${plan.model && !plan.model_timed ? ' (not timed yet)' : ''}`
+    : 'No avatar clips');
   $('estimateDetail').textContent = parts.join(' · ') + '.';
   $('estimateDetail').title = plan.steps.map(s => `${s.name}: ${fmtEta(s.seconds)}`).join('\n');
 }
@@ -855,7 +868,7 @@ function renderQuota(q) {
     lastQuota = key;
   }
   const at = new Date(Date.now() + q.resets_in * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  $('quotaReset').textContent = `Gemini and YouTube reset at midnight Pacific: ${fmtEta(q.resets_in)} from now (${at} your time).`;
+  $('quotaReset').textContent = `Resets in ${fmtEta(q.resets_in)} (${at}).`;
 }
 
 // --- Log ---
@@ -906,7 +919,7 @@ function renderQueue(el, q, doneIn) {
   // One finished job and nothing waiting says nothing the status line doesn't.
   el.hidden = !q.items.length && q.results.length < 2;
   if (el.hidden) return;
-  const head = !q.items.length ? '<b>Finished</b>' : `<b>Queue (${q.items.length})</b>` + (q.held
+  const head = !q.items.length ? `<b>${el.dataset.title} finished</b>` : `<b>${el.dataset.title} (${q.items.length})</b>` + (q.held
     ? `<span class="when">On hold until you press Resume</span><button type="button" data-resume="1">Resume</button>`
     : doneIn ? `<span class="when">All done around ${clockIn(doneIn)}</span>` : '');
   const now = q.current && q.items.length ? `<div class="queue-item"><div class="what">Now: ${esc(q.current.label)}</div></div>` : '';
@@ -965,6 +978,43 @@ for (const id of ['runQueue', 'uploadQueue']) {
   });
 }
 
+// --- Header: the short status on Run, and a bar under it per job ---
+function runShort(data, nextUp) {
+  if (data.running) {
+    const p = data.progress || {};
+    if (!p.stage) return 'Starting';
+    const clip = /^Clip (\d+) of (\d+)/.exec(p.detail || '');
+    return clip ? `Clip ${clip[1]}/${clip[2]}` : SHORT_STAGES[p.stage[2]] || p.stage[2];
+  }
+  if (nextUp) return 'Next job';
+  if (data.stopped) return 'Stopped';
+  if (data.returncode === 0) return 'Done';
+  return data.returncode === null ? 'Idle' : 'Failed';
+}
+// share is how much is done, 0 to 1, or null when that can't be told.
+function setStrip(job, show, text, right, share, hint) {
+  $(`${job}Strip`).hidden = !show;
+  if (!show) return;
+  $(`${job}StripText`).textContent = text;
+  $(`${job}StripRight`).textContent = right;
+  $(`${job}StripHint`).textContent = hint;
+  const bar = $(`${job}StripBar`);
+  bar.parentElement.classList.toggle('busy', share === null);
+  bar.style.width = `${share === null ? 30 : Math.round(share * 100)}%`;
+}
+function renderStrips(data) {
+  const p = data.progress || {}, stage = p.stage || [], eta = p.eta;
+  const video = p.run && p.run[1] > 1 ? `Video ${p.run[0]}/${p.run[1]} · ` : '';
+  setStrip('run', data.running, video + (stage[2] || 'Starting'),
+    eta ? `${fmtEta(eta.total_left)} left` : fmt(data.elapsed),
+    eta && eta.adjusted_total ? 1 - eta.total_left / eta.adjusted_total : null,
+    p.detail || STAGE_HINTS[stage[2]] || '');
+  const up = data.upload, at = (up.progress || {}).upload;
+  setStrip('upload', up.running, at ? `Uploading ${at[0]}/${at[1]}` : 'Uploading', fmt(up.elapsed),
+    at && at[1] > 1 ? (at[0] - 1) / at[1] : null, at ? at[2] : 'Writing the title and description.');
+  document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`);
+}
+
 // --- Status polling ---
 let wasRunning = false, uploadRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
 async function poll() {
@@ -999,6 +1049,10 @@ async function poll() {
   renderStopped(data.stopped_runs);
   $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode && !data.stopped ? ' fail' : ''));
   $('jumpDot').className = $('dot').className;
+  $('jumpRun').textContent = runShort(data, nextUp);
+  $('jumpQueue').textContent = runsQueued + uploadsQueued + data.stopped_runs.length;
+  $('queueEmpty').hidden = !$('runQueue').hidden || !$('stoppedRuns').hidden || !$('uploadQueue').hidden;
+  renderStrips(data);
   $('go').disabled = submitting;
   $('check').hidden = running;
   $('check').disabled = submitting;
@@ -1020,7 +1074,7 @@ async function poll() {
   } else if (data.returncode === 0) {
     $('statusText').textContent = 'Finished ✔';
   } else if (data.returncode !== null) {
-    $('statusText').textContent = `Failed (exit ${data.returncode}) — see the log and API errors below`;
+    $('statusText').textContent = `Failed (exit ${data.returncode}), see the log`;
   } else {
     $('statusText').textContent = 'Idle';
   }
@@ -1034,12 +1088,6 @@ async function poll() {
   $('comfyText').textContent = 'ComfyUI: ' + (c.online ? 'running'
     : c.starting ? 'starting… (loading models)'
     : c.can_start ? 'not running (Generate starts it)' : 'not running');
-
-  $('apiCard').hidden = !data.api_errors.length;
-  $('apiCount').textContent = data.api_errors.length;
-  $('apiErrors').innerHTML = data.api_errors.map(e => `
-    <div class="apierr"><span class="when">${esc(e.when)}</span> · ${esc(e.service)} <b>${esc(e.model)}</b>
-      <span class="code">${esc(e.status)}</span><br>${esc(e.message)}</div>`).join('');
 
   renderQuota(data.quota);
 
@@ -1107,10 +1155,10 @@ $('shutdown').addEventListener('click', async e => {
   document.body.innerHTML = '<div class="wrap"><h1>Auto YT Shorts</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>AutoShorts</b> shortcut.</p></div>';
 });
 
-// The section under the phone header, lit up in it.
+// The section under the header, lit up in it.
 const JUMPS = [...$('jump').querySelectorAll('a')];
 function markJump() {
-  const line = $('jump').getBoundingClientRect().bottom + 8;
+  const line = $('stick').getBoundingClientRect().bottom + 8;
   const here = JUMPS.filter(a => $(a.hash.slice(1)).getBoundingClientRect().top <= line).pop() || JUMPS[0];
   JUMPS.forEach(a => a.classList.toggle('active', a === here));
 }
