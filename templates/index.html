@@ -244,7 +244,7 @@
 
       <label for="topic">Topic</label>
       <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
-      <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you. Topics of videos already made are never repeated (<code>logs/generated_topics.jsonl</code>).</div>
+      <div class="hint">Leave empty and the AI picks a viral "did you know" topic for you. Topics of videos already made are never repeated (<code>logs/generated_topics.jsonl</code>). Discarding a stopped run or deleting a video from Ready frees its topic.</div>
 
       <div class="row">
         <div>
@@ -657,8 +657,10 @@ function privacyNote() { return `as ${$('privacy').value} (change it under Publi
 $('videos').addEventListener('click', async e => {
   const d = e.target.dataset || {};
   if (d.del) {
-    if (!confirm('Delete ' + d.del + '?')) return;
-    await fetch(`/delete/${folder}/` + encodeURIComponent(d.del), { method: 'POST' });
+    const after = folder === 'output' ? ' Its topic can be used again.' : ' Its topic stays used, as it is on YouTube.';
+    if (!confirm('Delete ' + d.del + '?' + after)) return;
+    const body = await (await fetch(`/delete/${folder}/` + encodeURIComponent(d.del), { method: 'POST' })).json();
+    if (body.warning) alert(body.warning);
     poll();
   } else if (d.up) {
     let topic = '';

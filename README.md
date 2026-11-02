@@ -281,7 +281,9 @@ until it finishes or you discard it, and the topic picker avoids its topic in th
 From the command line: `python main.py --resume run_20261101_172553_1`.
 
 Every successfully created video records its topic, narration and filename in
-`logs/generated_topics.jsonl`. Before a script is written, a fast Gemini model
+`logs/generated_topics.jsonl`. Deleting a video from Ready removes its entry, so the
+topic can be made again; one deleted from Uploaded keeps it, as it's still on YouTube.
+Before a script is written, a fast Gemini model
 (`GEMINI_FAST_MODEL`) checks the new topic against that history and rejects it
 if a viewer would feel they had already seen that video (a reworded repeat
 counts; another fact in the same broad subject does not). The AI picker then

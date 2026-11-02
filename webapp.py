@@ -42,7 +42,7 @@ from modules.quota import quota_summary
 from modules.run_eta import RunEta
 from modules.run_state import RunState, folder_size, list_runs
 from modules.saved_workflows import list_saved
-from modules.topic_history import read_history
+from modules.topic_history import forget_video, read_history
 
 load_dotenv()
 
@@ -1344,6 +1344,12 @@ def delete(folder, name):
     for companion in (thumbnail_path(path), avatar_still_path(path)):
         if os.path.exists(companion):
             os.remove(companion)
+    # An uploaded video's topic stays used: it's still on YouTube.
+    if folder == "output":
+        try:
+            forget_video(os.path.basename(path))
+        except (OSError, ValueError) as e:
+            return {"ok": True, "warning": f"The video is deleted, but its topic couldn't be freed: {e}"}
     return {"ok": True}
 
 
