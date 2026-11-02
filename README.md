@@ -172,7 +172,7 @@ python main.py
 ```
 
 1. The AI picks a trending topic, writes the script, generates the audio, downloads stock footage, and edits the video.
-2. The final video is saved to `0_output/` with a timestamped name (e.g. `short_20260812_1930.mp4`).
+2. The final video is saved to `0_output/` with a timestamped name ending in what made its presenter clips (e.g. `short_20260812_193000_minimax-h3.mp4`): `ltx`, `minimax-h3`, `wan` or another workflow's file name, `static` for the looped clip, or `stock` if there are none. The panel shows the same label.
 
 ### Automated / Unattended Runs
 

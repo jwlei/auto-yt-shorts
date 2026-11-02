@@ -451,9 +451,9 @@ def list_videos(folder):
         return []
 
     try:
-        topics = {entry.get("video"): entry["topic"] for entry in read_history()}
+        history = {entry.get("video"): entry for entry in read_history()}
     except (OSError, ValueError):
-        topics = {}  # A broken history only costs the topic captions
+        history = {}  # A broken history only costs the captions
 
     videos = []
     for name in os.listdir(directory):
@@ -462,7 +462,8 @@ def list_videos(folder):
         stat = os.stat(os.path.join(directory, name))
         videos.append({
             "name": name,
-            "topic": topics.get(name),
+            "topic": history.get(name, {}).get("topic"),
+            "model": history.get(name, {}).get("model"),
             "size_mb": round(stat.st_size / (1024 * 1024), 1),
             "created": datetime.fromtimestamp(stat.st_mtime).strftime("%d/%m %H:%M"),
             "mtime": stat.st_mtime,

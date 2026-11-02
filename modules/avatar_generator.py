@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 
 import ffmpeg
@@ -36,6 +37,8 @@ DEFAULT_PERSONA = (
 DEFAULT_REFERENCE_IMAGES = os.path.join("assets", "avatar", "avatar*.jpg")
 
 COMFYUI_CLIENT_ID = "aishorts"
+# How a workflow's nodes give away the video model it runs, for the label on its videos.
+VIDEO_MODELS = (("MiniMaxH3", "minimax-h3"), ("LTX", "ltx"), ("Wan", "wan"))
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 SEED_INPUTS = ("seed", "noise_seed")
 POLL_INTERVAL = 5
@@ -280,6 +283,15 @@ class AvatarGenerator:
         if "prompt" not in fields:
             raise RuntimeError(f"{map_path} must map 'prompt' to the positive prompt input.")
         return workflow, fields
+
+    def model_label(self):
+        """The video model this workflow runs: named by its nodes, or else by its file."""
+        kinds = [str(node.get("class_type", "")) for node in self.workflow.values()]
+        for prefix, label in VIDEO_MODELS:
+            if any(kind.startswith(prefix) for kind in kinds):
+                return label
+        name = os.path.splitext(os.path.basename(self.workflow_path))[0]
+        return re.sub(r"[^\w-]+", "-", name).strip("-").lower() or "comfyui"
 
     def can_render(self, scene):
         """With nothing to cut to, a lip-synced clip must cover the whole line; looping it would desync the mouth."""

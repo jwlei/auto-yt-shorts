@@ -137,8 +137,15 @@ def stage(name, upload):
     print(f"▶ Stage {stages.index(name) + 1}/{len(stages)}: {name}")
 
 
-def build_output_name(prefix="short"):
-    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+def build_output_name(model, prefix="short"):
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{model}.mp4"
+
+
+def model_used(generator, avatar_clips, static_clip):
+    """What really made the video's presenter clips. If every render failed it's stock footage, whatever was chosen."""
+    if any(path != static_clip for path in avatar_clips.values()):
+        return generator.model_label() if generator else "comfyui"
+    return "static" if avatar_clips else "stock"
 
 
 # How many topics the picker may suggest before a run gives up on repeats.
@@ -293,6 +300,7 @@ async def generate_one(args, state):
         for i in indices:
             if i not in avatar_clips:
                 avatar_clips[i] = composer.avatar_path
+    model = model_used(generator, avatar_clips, composer.avatar_path)
 
     final_path = state.final
     if not final_path:
@@ -305,7 +313,7 @@ async def generate_one(args, state):
             return None
 
         stage("Stitching", upload)
-        output_name = args.output if (args.output and args.runs == 1) else build_output_name()
+        output_name = args.output if (args.output and args.runs == 1) else build_output_name(model)
         final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
         state.update(final=final_path)
 
@@ -337,7 +345,7 @@ async def generate_one(args, state):
 
     if final_path:
         try:
-            record_successful_topic(topic, final_path, narration)
+            record_successful_topic(topic, final_path, narration, model)
         except OSError as e:
             raise RuntimeError(f"Video was created at {final_path}, but its topic could not be recorded: {e}") from e
         state.remove(keep_files=args.keep_cache)

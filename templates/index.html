@@ -328,8 +328,8 @@
       <details>
         <summary>Advanced</summary>
         <label for="output">File name (single video only)</label>
-        <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS.mp4" autocomplete="off">
-        <div class="hint">Leave empty for a timestamped name. Saved in <code>0_output</code>.</div>
+        <input id="output" name="output" placeholder="short_YYYYMMDD_HHMMSS_model.mp4" autocomplete="off">
+        <div class="hint">Leave empty for a timestamped name ending in the video model. Saved in <code>0_output</code>.</div>
 
         <label class="check">
           <input type="checkbox" name="fail_fast">
@@ -595,7 +595,7 @@ function renderVideos() {
       <div class="vid" data-name="${name}">
         <video controls preload="metadata" playsinline src="/videos/${folder}/${url}#t=0.1"></video>
         <h3>${v.topic ? esc(v.topic) : '<span style="color:var(--muted)">No topic recorded</span>'}</h3>
-        <div class="meta" title="${name}">${name} · ${v.created} · ${v.size_mb} MB</div>
+        <div class="meta" title="${name}">${v.model ? `${esc(v.model)} · ` : ''}${name} · ${v.created} · ${v.size_mb} MB</div>
         <div class="acts">${main}<button type="button" class="del" data-del="${name}">Delete</button></div>
       </div>`;
     }).join('') : `<div class="empty">${folder === 'output' ? 'No videos waiting. Press Generate to make one.' : 'Nothing uploaded yet.'}</div>`;
