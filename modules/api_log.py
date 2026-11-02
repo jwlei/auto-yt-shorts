@@ -2,13 +2,15 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from modules.paths import PROJECT_ROOT
 
 LOG_PATH = os.path.join(PROJECT_ROOT, "logs", "api_errors.log")
 USAGE_PATH = os.path.join(PROJECT_ROOT, "logs", "api_usage.jsonl")
+# Models the server said are used up, and when each is back, for every process to see.
+EXHAUSTED_PATH = os.path.join(PROJECT_ROOT, "logs", "exhausted_models.json")
 
 # Google's daily quotas roll over at midnight Pacific, whatever the local time is.
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -25,15 +27,53 @@ def is_daily_quota(error):
     return any(mark in text for mark in ("per day", "perday", "quotaexceeded", "dailylimitexceeded"))
 
 
-def _short_wait(text):
-    """'Please retry in 7h38m32.93s' / retryDelay '45s' -> '7h 38m' / '45s', or None."""
-    match = re.search(r"retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)", text, re.I) \
+def _wait_seconds(text):
+    """'Please retry in 7h38m32.93s' / retryDelay '45s' -> how many seconds that is, or None."""
+    match = re.search(r"retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s?)?)", text, re.I) \
         or re.search(r"'retryDelay':\s*'([\d.]+s)'", text)
     if not match or not match.group(1):
         return None
-    parts = {unit: value for value, unit in re.findall(r"([\d.]+)([hms])", match.group(1))}
-    hours, minutes, seconds = (int(float(parts.get(u, 0))) for u in "hms")
-    hours, minutes = hours + (minutes + seconds // 60) // 60, (minutes + seconds // 60) % 60
+    parts = {unit: float(value) for value, unit in re.findall(r"([\d.]+)([hms]?)", match.group(1))}
+    return parts.get("h", 0) * 3600 + parts.get("m", 0) * 60 + parts.get("s", parts.get("", 0))
+
+
+def _next_reset():
+    tomorrow = datetime.now(PACIFIC).date() + timedelta(days=1)
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=PACIFIC).timestamp()
+
+
+def _read_exhausted():
+    try:
+        with open(EXHAUSTED_PATH, "r", encoding="utf-8") as f:
+            return {model: at for model, at in json.load(f).items() if isinstance(at, (int, float)) and at > time.time()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def mark_exhausted(model, error):
+    """The server refused this model for the day: skip it until the time it gave, or else the daily reset."""
+    wait = _wait_seconds(str(error))
+    exhausted = {**_read_exhausted(), model: time.time() + wait if wait else _next_reset()}
+    temp = f"{EXHAUSTED_PATH}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(EXHAUSTED_PATH), exist_ok=True)
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump(exhausted, f)
+        os.replace(temp, EXHAUSTED_PATH)
+    except OSError:
+        pass  # Only costs one more refused request
+
+
+def is_exhausted(model):
+    return model in _read_exhausted()
+
+
+def _short_wait(text):
+    """'Please retry in 7h38m32.93s' / retryDelay '45s' -> '7h 38m' / '45s', or None."""
+    total = _wait_seconds(text)
+    if total is None:
+        return None
+    hours, minutes, seconds = int(total // 3600), int(total % 3600 // 60), int(total % 60)
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m" if minutes else f"{seconds % 60}s"

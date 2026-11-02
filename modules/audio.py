@@ -9,7 +9,7 @@ import mutagen
 import requests
 from dotenv import load_dotenv
 
-from modules.api_log import is_daily_quota, log_api_call, log_api_error
+from modules.api_log import is_daily_quota, is_exhausted, log_api_call, log_api_error, mark_exhausted
 from modules.gemini_models import get_tts_models
 
 load_dotenv()
@@ -204,6 +204,8 @@ class AudioEngine:
                 message = response.text
             error = GeminiTTSError(model, response.status_code, message)
             log_api_error("Gemini TTS", model, error)
+            if is_daily_quota(message):
+                mark_exhausted(model, message)
 
             retryable = response.status_code == 429 or response.status_code >= 500
             if not retryable or is_daily_quota(message) or attempt == RATE_LIMIT_RETRIES:
@@ -296,6 +298,9 @@ class AudioEngine:
         """
         errors = []
         for model in self.gemini_models:
+            if is_exhausted(model):
+                errors.append(f"{model}: daily quota used up")
+                continue
             print(f"🎙️ Gemini narration for {len(script_data)} scenes (voice: {self.gemini_voice}, model: {model})...")
             try:
                 try:

@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-from modules.api_log import is_daily_quota, log_api_call, log_api_error, quota_day
+from modules.api_log import is_daily_quota, is_exhausted, log_api_call, log_api_error, mark_exhausted
 from modules.gemini_models import get_fast_models, get_image_models, get_text_models
 
 load_dotenv()
@@ -80,9 +80,6 @@ DEFAULT_TIMEOUT = 90
 # Models that timed out or no longer exist, in this process: later calls skip them
 # instead of waiting on them again.
 _skipped_models = set()
-# Models that used up their daily quota, and on which quota day: a batch running
-# past the reset gets them back.
-_exhausted_models = {}
 
 
 def _call_with_deadline(fn, seconds):
@@ -122,7 +119,10 @@ def _generate(prompt, retries=4, models=None, config=None):
     errors = []
 
     for model in models or get_text_models():
-        if model in _skipped_models or _exhausted_models.get(model) == quota_day():
+        if model in _skipped_models:
+            continue
+        if is_exhausted(model):
+            errors.append(f"{model} (daily quota used up)")
             continue
         for attempt in range(retries):
             try:
@@ -138,7 +138,7 @@ def _generate(prompt, retries=4, models=None, config=None):
                     break
                 if is_daily_quota(e):
                     print(f"   ⚠️ {model} has used its daily quota. Trying the next model...")
-                    _exhausted_models[model] = quota_day()
+                    mark_exhausted(model, e)
                     break
                 if getattr(e, "code", None) == 404:
                     print(f"   ⚠️ {model} no longer exists. Trying the next model...")
