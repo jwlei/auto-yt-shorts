@@ -326,7 +326,7 @@ class AvatarGenerator:
 
     # --- Pipeline entry point ---
 
-    def generate(self, script_data, indices, brain, kept=None, on_clip=None):
+    def generate(self, script_data, indices, brain, kept=None, on_clip=None, prompts=None, on_prompt=None):
         """
         Renders one clip for each scene index. Returns {index: clip path} for the
         clips that succeeded; the caller decides what to show for the rest.
@@ -337,6 +337,7 @@ class AvatarGenerator:
 
         `kept` holds clips accepted earlier, which aren't rendered again. on_clip is
         told about each new clip as soon as it is accepted, so it survives a Stop.
+        `prompts` and on_prompt do the same for what each clip's prompt cost.
         """
         print(f"🧑 Generating {len(indices)} avatar clip(s) with ComfyUI ({self.url})"
               f"{', lip-synced' if self.lipsync else ''}"
@@ -381,8 +382,12 @@ class AvatarGenerator:
                 print(f"   ❌ Could not upload the reference image: {e}")
                 return clips
 
-            action = brain.write_avatar_prompt(_spoken_part(scene, on_screen), seconds, speaking=self.lipsync,
-                                               camera=next(camera_moves), gesture=next(gestures))
+            action = (prompts or {}).get(i)
+            if not action:
+                action = brain.write_avatar_prompt(_spoken_part(scene, on_screen), seconds, speaking=self.lipsync,
+                                                   camera=next(camera_moves), gesture=next(gestures))
+                if on_prompt:
+                    on_prompt(i, action)
             # The reference image already shows the persona; restating it fights the image.
             prompt = action if reference else f"{self.persona}\n\n{action}"
 

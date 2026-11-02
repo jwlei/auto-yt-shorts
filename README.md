@@ -281,6 +281,10 @@ its original options and persona, without spending Gemini quota or GPU time on w
 the clip being rendered at the time starts over, and so do the seconds-long render and stitch.
 The rest of a batch comes along with it. ✕ deletes the run. Each one takes roughly 100-150 MB
 until it finishes or you discard it, and the topic picker avoids its topic in the meantime.
+**Generate** continues a stopped video rather than paying for the same work again: the one on the topic
+you typed, or the oldest with the topic left empty. The options on the form apply, and only what they
+change is done again. Typing another topic starts a new video. The topic, the voice take and each clip's
+prompt are all kept the moment they are paid for, whatever stops the run.
 From the command line: `python main.py --resume run_20261101_172553_1`.
 
 Every successfully created video records its topic, narration and filename in

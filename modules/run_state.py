@@ -16,6 +16,13 @@ RUN_ENV = ("AVATAR_SOURCE", "COMFYUI_WORKFLOW", "AVATAR_CLIPS_MIN", "AVATAR_CLIP
            "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS")
 RUN_ID = re.compile(r"run_\d{8}_\d{6}_\d+")
 SAVE_ATTEMPTS = 5
+# What changes the clips, and of those, what also changes which scenes she appears in.
+RENDER_ENV = ("AVATAR_SOURCE", "COMFYUI_WORKFLOW", "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS")
+SCENE_ENV = ("AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS")
+
+
+def option(argv, name, default=None):
+    return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
 @dataclass
@@ -42,6 +49,7 @@ class RunState:
     avatar_indices: list = None
     reference_image: str = None  # Each video picks a persona at random, and has to stay her
     avatar_clips: dict = field(default_factory=dict)
+    avatar_prompts: dict = field(default_factory=dict)  # Written per clip, and paid for: a clip rendered again keeps its own
     avatar_done: bool = False
     final: str = None
 
@@ -60,6 +68,7 @@ class RunState:
             with open(os.path.join(RUNS_DIR, run_id, "state.json"), "r", encoding="utf-8") as f:
                 state = cls(**json.load(f))
             state.avatar_clips = {int(index): path for index, path in state.avatar_clips.items()}
+            state.avatar_prompts = {int(index): prompt for index, prompt in state.avatar_prompts.items()}
             state._forget_missing()
         except (OSError, ValueError, TypeError, AttributeError):
             return None  # Nothing saved, or a broken file: nothing to continue
@@ -98,10 +107,30 @@ class RunState:
         self.avatar_clips[index] = path
         self.save()
 
+    def keep_prompt(self, index, prompt):
+        self.avatar_prompts[index] = prompt
+        self.save()
+
+    def adopt(self, argv, env, videos_after):
+        """Takes the options chosen now, for Generate to continue this run. Only what they change is done again."""
+        changed = lambda names: any(self.env.get(name) != env.get(name) for name in names)
+        layout_changed = option(self.argv, "--avatar-clips") != option(argv, "--avatar-clips")
+        if option(self.argv, "--voice") != option(argv, "--voice"):
+            shutil.rmtree(self.audio_dir, ignore_errors=True)
+            self.voiced = False
+            self.avatar_clips, self.avatar_done, self.final = {}, False, None  # Lip-synced to the old voice
+        if changed(RENDER_ENV) or layout_changed:
+            self.avatar_clips, self.avatar_done, self.final = {}, False, None
+        if changed(SCENE_ENV) or layout_changed:
+            self.avatar_indices, self.avatar_prompts = None, {}
+        self.argv, self.env = list(argv), {name: env[name] for name in RUN_ENV if env.get(name)}
+        self.number, self.videos_after = 1, videos_after
+        self.save()
+
     def save(self):
         """Never stops the render it is saving: a failed save only costs the chance to continue from here."""
-        # Before the script exists, only a later video of a batch has anything to continue: the videos left.
-        if not self.script and self.number == 1:
+        # Before a topic exists, only a later video of a batch has anything to continue: the videos left.
+        if not self.topic and not self.script and self.number == 1:
             return
         temp = self.path + ".tmp"
         try:
@@ -122,7 +151,7 @@ class RunState:
     def release_batch(self):
         """The batch moved on without this video, so continuing it must not make the rest again."""
         self.videos_after = 0
-        if self.script:
+        if self.topic or self.script:
             self.save()
         else:
             self.remove()

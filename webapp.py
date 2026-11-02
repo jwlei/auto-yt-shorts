@@ -39,7 +39,7 @@ from modules.avatar_generator import COMFYUI_CLIENT_ID, avatar_clip_range, on_sc
 from modules.paths import OUTPUT_DIR, UPLOADED_DIR, avatar_still_path, thumbnail_path
 from modules.quota import quota_summary
 from modules.run_eta import RunEta
-from modules.run_state import RunState, folder_size, list_runs
+from modules.run_state import RunState, folder_size, list_runs, option
 from modules.saved_workflows import list_saved
 from modules.topic_history import forget_video, read_history
 
@@ -835,6 +835,20 @@ def busy_runs():
     return busy
 
 
+def run_to_continue(topic, argv):
+    """
+    The stopped run Generate should finish rather than pay for the same work again:
+    the one on this topic, or the oldest if no topic was asked for. A script in
+    another language is no use.
+    """
+    busy = busy_runs()
+    runs = [state for state in reversed(list_runs())
+            if state.id not in busy and option(state.argv, "--lang", "en-GB") == option(argv, "--lang", "en-GB")]
+    if not topic:
+        return runs[0] if runs else None
+    return next((state for state in runs if (state.topic or "").casefold() == topic.casefold()), None)
+
+
 def stopped_runs():
     # Cached briefly: every open browser polls status every 2s.
     if time.time() - _runs_cache["at"] > 3:
@@ -1036,6 +1050,9 @@ def estimate():
     argv, env, error = build_run(request.form)
     if error:
         return {"ok": False, "error": error}
+    state = run_to_continue((request.form.get("topic") or "").strip(), argv)
+    if state:
+        return {"ok": True, **RunEta(resume_argv(state), state.env, STAGE_TIMINGS).plan(), "continues": state.topic or "the stopped video"}
     return {"ok": True, **RunEta(argv, env, STAGE_TIMINGS).plan()}
 
 
@@ -1055,7 +1072,7 @@ def describe_run(form, argv):
 @app.route("/generate", methods=["POST"])
 @password_required
 def generate():
-    """Starts a run, or queues it behind the one in progress."""
+    """Starts a run, or queues it behind the one in progress. Stopped work on it is continued, not paid for again."""
     argv, env, error = build_run(request.form)
     if error:
         return {"ok": False, "error": error}, 400
@@ -1069,6 +1086,12 @@ def generate():
         if output and other["output"].lower() == output.lower():
             return {"ok": False, "error": "That file name is already used by a running or queued job."}, 409
 
+    state = run_to_continue(topic, argv)
+    if state:
+        state.adopt(argv[2:], env, int(option(argv, "--runs", 1)) - 1)
+        reply = queue_continued(state)
+        return (reply, 500) if reply.get("error") else {**reply, "continued": state.topic or "the stopped video"}
+
     label, detail = describe_run(request.form, argv)
     item = {"label": label, "detail": detail, "argv": argv, "env": env, "topic": topic, "output": output,
             "form": request.form.to_dict(), "estimate": RunEta(argv, env, STAGE_TIMINGS).plan()["total"]}
@@ -1076,6 +1099,20 @@ def generate():
     if item.get("error"):
         return {"ok": False, "error": item["error"]}, 500
     return {"ok": True, "queued": queued}
+
+
+def queue_continued(state):
+    argv = resume_argv(state)
+    topic = state.topic or ""
+    output = argv[argv.index("--output") + 1] if "--output" in argv else ""
+    clips = argv[argv.index("--avatar-clips") + 1] if "--avatar-clips" in argv else "auto"
+    item = {"label": topic or f"Video {state.number}", "detail": f"Continues at {state.next_stage()}",
+            "argv": argv, "env": dict(state.env), "topic": topic, "output": output, "resume": state.id,
+            "form": {"avatar_source": state.env.get("AVATAR_SOURCE") or "comfyui", "avatar_clips": clips},
+            "estimate": RunEta(argv, state.env, STAGE_TIMINGS).plan()["total"]}
+    queued = run_queue.add(item)
+    _runs_cache["at"] = 0.0
+    return {"ok": False, "error": item["error"]} if item.get("error") else {"ok": True, "queued": queued}
 
 
 @app.route("/runs/<run_id>/continue", methods=["POST"])
@@ -1096,16 +1133,8 @@ def continue_run(run_id):
         if output and other["output"].lower() == output.lower():
             return {"ok": False, "error": "That file name is already used by a running or queued job."}, 409
 
-    clips = argv[argv.index("--avatar-clips") + 1] if "--avatar-clips" in argv else "auto"
-    item = {"label": topic or f"Video {state.number}", "detail": f"Continues at {state.next_stage()}",
-            "argv": argv, "env": dict(state.env), "topic": topic, "output": output, "resume": run_id,
-            "form": {"avatar_source": state.env.get("AVATAR_SOURCE") or "comfyui", "avatar_clips": clips},
-            "estimate": RunEta(argv, state.env, STAGE_TIMINGS).plan()["total"]}
-    queued = run_queue.add(item)
-    _runs_cache["at"] = 0.0
-    if item.get("error"):
-        return {"ok": False, "error": item["error"]}, 500
-    return {"ok": True, "queued": queued}
+    reply = queue_continued(state)
+    return (reply, 500) if reply.get("error") else reply
 
 
 @app.route("/runs/<run_id>/discard", methods=["POST"])

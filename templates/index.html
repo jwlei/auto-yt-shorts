@@ -388,6 +388,7 @@
   </div>
   <div class="err" id="formError" hidden></div>
   <div class="estimate" id="estimate" hidden>
+    <div class="hint" id="estimateContinues" hidden></div>
     <div id="estimateTotal"></div>
     <div class="hint" id="estimateDetail"></div>
   </div>
@@ -785,6 +786,8 @@ function renderPlan() {
     $('estimateDetail').textContent = '';
     return;
   }
+  $('estimateContinues').hidden = !plan.continues;
+  if (plan.continues) $('estimateContinues').textContent = `Generate continues this stopped video, so nothing is paid for twice: ${plan.continues}`;
   const when = queueAhead === null ? ''
     : ` · ${queueAhead ? 'after the jobs ahead, ' : ''}done around ${clockIn(queueAhead + plan.total)}`;
   $('estimateTotal').innerHTML = `Estimated time: <b>${fmtEta(plan.total)}</b>${when}`;
@@ -1016,7 +1019,7 @@ function renderStrips(data) {
 }
 
 // --- Status polling ---
-let wasRunning = false, uploadRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
+let stoppedCount = 0, wasRunning = false, uploadRunning = false, runsQueued = 0, uploadsQueued = 0, submitting = false;
 async function poll() {
   let data;
   try {
@@ -1056,7 +1059,8 @@ async function poll() {
   $('go').disabled = submitting;
   $('check').hidden = running;
   $('check').disabled = submitting;
-  $('go').textContent = running || runsQueued ? 'Add to queue' : 'Generate';
+  $('go').textContent = running || runsQueued ? 'Add to queue' : plan && plan.continues ? 'Continue video' : 'Generate';
+  if (data.stopped_runs.length !== stoppedCount) { stoppedCount = data.stopped_runs.length; refreshPlan(); }
   $('stop').hidden = !running;
 
   renderNow(data);

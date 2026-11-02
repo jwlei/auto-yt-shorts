@@ -214,6 +214,16 @@ class AudioEngine:
             print(f"      ⏳ {model} rate-limited. Waiting {delay:.0f}s...")
             time.sleep(delay)
 
+    def _voice_file(self, path, text, style, model):
+        """Requests the audio unless an earlier try of this run already paid for it. In one go, so a Stop can't leave half a file."""
+        if os.path.exists(path) and self.get_audio_duration(path) > 0:
+            print(f"   ♻️ Keeping the audio already voiced: {os.path.basename(path)}")
+            return
+        audio = self._gemini_request(text, style, model)
+        with open(path + ".tmp", "wb") as f:
+            f.write(audio)
+        os.replace(path + ".tmp", path)
+
     def _narrate_single_take(self, script_data, model):
         """
         Voices the whole script in ONE request, then cuts it into scenes at the
@@ -226,9 +236,9 @@ class AudioEngine:
                  f"one second between paragraphs." + (f" Paragraph moods: {moods}." if moods else ""))
         text = "\n\n".join(scene['text'] for scene in script_data)
 
-        take_path = os.path.join(self.output_dir, "narration_full.wav")
-        with open(take_path, "wb") as f:
-            f.write(self._gemini_request(text, style, model))
+        # By model, as a video is only ever voiced by one.
+        take_path = os.path.join(self.output_dir, f"narration_full_{model}.wav")
+        self._voice_file(take_path, text, style, model)
         total = self.get_audio_duration(take_path)
         if total <= 0:
             raise GeminiTTSError(model, 200, "returned unreadable audio")
@@ -278,9 +288,8 @@ class AudioEngine:
         narrated = []
         for scene in script_data:
             style = f"{self.style}. Mood: {scene['mood']}" if scene.get('mood') else self.style
-            file_path = os.path.join(self.output_dir, f"voice_{scene['id']}.wav")
-            with open(file_path, "wb") as f:
-                f.write(self._gemini_request(scene['text'], style, model))
+            file_path = os.path.join(self.output_dir, f"scene_{scene['id']}_{model}.wav")
+            self._voice_file(file_path, scene['text'], style, model)
             duration = self.get_audio_duration(file_path)
             if duration <= 0:
                 raise GeminiTTSError(model, 200, f"scene {scene['id']} returned unreadable audio")

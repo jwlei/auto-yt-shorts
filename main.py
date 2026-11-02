@@ -213,9 +213,10 @@ async def generate_one(args, state):
         stage("Topic & script", upload)
         try:
             stopped = [run.topic for run in list_runs() if run.topic and run.id != state.id]
-            topic = choose_topic(brain, args.topic, read_successful_topics(), stopped)
+            topic = state.topic or choose_topic(brain, args.topic, read_successful_topics(), stopped)
             if not topic:
                 return None
+            state.update(topic=topic)
             script = brain.generate_script(topic, lang=lang)
         except Exception as e:
             print(f"❌ Topic/script Error: {e}")
@@ -289,7 +290,8 @@ async def generate_one(args, state):
     if not state.avatar_done:
         if indices and generator:
             try:
-                generator.generate(script, indices, brain, kept=state.avatar_clips, on_clip=state.keep_clip)
+                generator.generate(script, indices, brain, kept=state.avatar_clips, on_clip=state.keep_clip,
+                                   prompts=state.avatar_prompts, on_prompt=state.keep_prompt)
             except Exception as e:
                 print(f"❌ Avatar Error: {e}")
         state.update(avatar_done=True)
