@@ -23,6 +23,8 @@ SEED_CONTROLS = ("fixed", "increment", "decrement", "randomize")
 # Latent video comes in 4n+1 frames.
 FRAME_STEP = 4
 PROMPT_INPUTS = ("text", "prompt", "value")
+# The built-in workflow is this one plus the narration: two LTX entries only invite picking the one that can't lip-sync.
+HIDDEN = ("LTX-2.3_-_I2V_T2V_Basic_GGUF.json",)
 # SaveVideo always writes to ComfyUI's output folder, which the pipeline stays out of.
 COMBINE = "VHS_VideoCombine"
 COMBINE_DEFAULTS = {"loop_count": 0, "filename_prefix": "pipeline", "format": "video/h264-mp4", "pix_fmt": "yuv420p",
@@ -274,9 +276,9 @@ def find_fields(api, info):
     fields = {"prompt": _prompt_input(api), **_image_fields(api, info)}
     if not fields["prompt"]:
         raise Unusable("Couldn't find its prompt: nothing feeds the sampler's positive input, or a prompt input.")
-    audio = _one_input(api, "LoadAudio", "audio", "audio")
-    if audio:
-        fields["audio"] = audio
+    fields["audio"] = _one_input(api, "LoadAudio", "audio", "audio")
+    if not fields["audio"]:
+        raise Unusable("It has no Load Audio node feeding the video, so she can't lip-sync.")
 
     switch = _titled(api, r"text.?to.?video", (bool,))
     if switch:
@@ -338,7 +340,7 @@ def _from_comfyui(url, folder):
     info = requests.get(f"{url}/object_info", timeout=60).json()
     os.makedirs(folder, exist_ok=True)
     found = []
-    for name in sorted(n for n in names if n.lower().endswith(".json")):
+    for name in sorted(n for n in names if n.lower().endswith(".json") and n not in HIDDEN):
         entry = {"name": name, "label": _label(name)}
         try:
             response = requests.get(f"{url}/api/userdata/{quote('workflows/' + name, safe='')}", timeout=10)
@@ -352,12 +354,13 @@ def _from_comfyui(url, folder):
         except (KeyError, IndexError, TypeError, AttributeError, ValueError, requests.RequestException) as e:
             entry["problem"] = f"Couldn't read it ({e})."
         found.append(entry)
-    _forget_deleted(folder, found)
+    _forget_deleted(folder, names)
     return found
 
 
-def _forget_deleted(folder, found):
-    keep = {os.path.basename(entry["path"]) for entry in found if "path" in entry}
+def _forget_deleted(folder, names):
+    # Only what ComfyUI no longer has: a saved run may still use one the list no longer offers.
+    keep = {_file_stem(name) + ".json" for name in names}
     for file in os.listdir(folder):
         if file.endswith(".map.json") and file[:-len(".map.json")] + ".json" not in keep:
             for stale in (file, file[:-len(".map.json")] + ".json"):
@@ -379,7 +382,7 @@ def _from_earlier(folder):
                 name = fields["_saved_as"]
             except (OSError, ValueError, KeyError):
                 continue
-            if os.path.exists(path):
+            if os.path.exists(path) and "audio" in fields:
                 found.append({"name": name, "label": _label(name), "path": path, "takes": takes(fields)})
     return found
 

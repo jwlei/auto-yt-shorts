@@ -211,6 +211,16 @@ def get_avatar_source():
     return source
 
 
+def video_model(workflow, path):
+    """The video model an API workflow runs: named by its nodes, or else by its file."""
+    kinds = [str(node.get("class_type", "")) for node in workflow.values()]
+    for prefix, label in VIDEO_MODELS:
+        if any(kind.startswith(prefix) for kind in kinds):
+            return label
+    name = os.path.splitext(os.path.basename(path))[0]
+    return re.sub(r"[^\w-]+", "-", name).strip("-").lower() or "comfyui"
+
+
 class AvatarGenerator:
     """
     Renders presenter clips with a ComfyUI workflow exported in API format.
@@ -285,13 +295,7 @@ class AvatarGenerator:
         return workflow, fields
 
     def model_label(self):
-        """The video model this workflow runs: named by its nodes, or else by its file."""
-        kinds = [str(node.get("class_type", "")) for node in self.workflow.values()]
-        for prefix, label in VIDEO_MODELS:
-            if any(kind.startswith(prefix) for kind in kinds):
-                return label
-        name = os.path.splitext(os.path.basename(self.workflow_path))[0]
-        return re.sub(r"[^\w-]+", "-", name).strip("-").lower() or "comfyui"
+        return video_model(self.workflow, self.workflow_path)
 
     def can_render(self, scene):
         """With nothing to cut to, a lip-synced clip must cover the whole line; looping it would desync the mouth."""

@@ -135,7 +135,7 @@ She stays on screen for a random 3-6 seconds each time (`AVATAR_MIN_SECONDS`/`MA
 
 - `comfyui/avatar_lipsync.json` (default) is the workflow in API format (ComfyUI → Workflow → **Export (API)**): LTX-2.3 I2V/T2V plus three nodes that load the narration, encode it, and mask it so the audio is kept and only the video is generated.
 - `comfyui/avatar_workflow.json` is the same workflow without lip-sync: the presenter reacts silently while the narration plays over her. Point `COMFYUI_WORKFLOW` at it to use it.
-- **ComfyUI workflow** in the panel lists what you saved in ComfyUI, and replaces Style when you pick one. The default is the built-in workflow, as before. The panel converts each one to API format and finds its inputs from the graph (the conversions sit in `logs/workflows/`, so they stay listed with ComfyUI off; until the panel has seen ComfyUI on once it has none to list, and **Start ComfyUI** under the list starts it). One that can't run is greyed out, and the hint says why: a model or node that isn't installed, or subgraphs. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. She only lip-syncs in a workflow with a Load Audio node. A continued run keeps its workflow. A saved `SaveVideo` becomes VideoHelperSuite's Video Combine, to keep clips out of ComfyUI's `output` folder.
+- **ComfyUI workflow** in the panel lists what you saved in ComfyUI, and replaces Style when you pick one. The default, **LTX-2.3**, is the built-in workflow, as before; your saved `LTX-2.3_-_I2V_T2V_Basic_GGUF` isn't listed, since the built-in is that plus the narration. The panel converts each one to API format and finds its inputs from the graph (the conversions sit in `logs/workflows/`, so they stay listed with ComfyUI off; until the panel has seen ComfyUI on once it has none to list, and **Start ComfyUI** under the list starts it). One that can't run is greyed out, and the hint says why: no Load Audio node feeding the video, a model or node that isn't installed, or subgraphs. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. A continued run keeps its workflow. A saved `SaveVideo` becomes VideoHelperSuite's Video Combine, to keep clips out of ComfyUI's `output` folder.
 - Each `.map.json` says which node inputs to fill, as `"<node id>.<input>"`: `prompt` (required), `image`, `audio` (turns on lip-sync), `text_to_video`, `seconds`, `width`, `height`. Seeds are randomised automatically. If you swap in another workflow, update the map to match.
 - Clips stay out of ComfyUI's `output` folder: any `save_output` input is switched off when a clip is queued, so ComfyUI saves it to its `temp` folder (which it wipes on every start) and the pipeline downloads it from there. Nothing is ever deleted from `output`, and renders you start in ComfyUI yourself save as usual. A swapped-in workflow must use a save node with `save_output`, such as Video Combine.
 
@@ -236,7 +236,9 @@ the whole run, including any videos still to come. It keeps the original ETA fro
 start of the run next to an adjusted one, and lists what moved it: a clip that failed its
 check and renders again, more or fewer clips than expected, or steps running slower or
 faster than estimated. Finished steps are timed and saved to `logs/stage_timings.json`, so
-the estimates start rough and get better with each run. Delete that file to start over.
+the estimates start rough and get better with each run. Renders are timed per video model,
+as they differ by far: one not timed yet goes by the average of all models, and the panel
+says so, until its first clip is done. Delete that file to start over.
 
 The left column lists today's quota per model: Gemini text and voice models, the stock
 provider and YouTube upload units. Google has no API for what is left of a quota, so

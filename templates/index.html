@@ -151,10 +151,25 @@
   .q-row.low .q-bar > div { background: #f2b84b; }
   .q-row.out .q-val { color: var(--err); }
   .q-row.out .q-bar > div { background: var(--err); }
+  /* Phones: the page is one long column, so this stays on top to get around it. */
+  .jump {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; gap: 6px;
+    margin: 0 -16px 12px; padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .jump a {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--muted); font-size: .85rem; font-weight: 600; text-decoration: none; white-space: nowrap;
+  }
+  .jump a.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+  .dashboard > .card { scroll-margin-top: calc(72px + env(safe-area-inset-top)); }
   /* Desktop: options (two columns), the run card (Generate, ComfyUI, progress,
      log) and, from 1280px, the portrait videos on the far right, all on one
      screen. Narrower desktops put the videos underneath. Phones keep one column. */
   @media (min-width: 1000px) {
+    .jump { display: none; }
     .wrap { max-width: 1880px; padding: 14px 20px 20px; }
     .top { align-items: baseline; margin-bottom: 12px; }
     .top .title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
@@ -214,6 +229,12 @@
     {% if protected %}<a href="{{ url_for('logout') }}">Sign out</a>{% endif %}
   </div>
 </div>
+
+<nav class="jump" id="jump" aria-label="Sections">
+  <a href="#form">Options</a>
+  <a href="#runCard"><span class="dot" id="jumpDot"></span>Run</a>
+  <a href="#videosCard">Videos (<span id="jumpCount">0</span>)</a>
+</nav>
 
 <div class="dashboard">
 <form class="card" id="form">
@@ -300,10 +321,10 @@
         </div>
         <label for="workflow">ComfyUI workflow</label>
         <select id="workflow" name="workflow">
-          <option value="">Built-in LTX, by Style</option>
+          <option value="">LTX-2.3</option>
         </select>
         <button type="button" class="ghost" id="comfyStart" title="Only ComfyUI can list what's saved in it. Generate also starts it, and Shut down closes it." hidden>Start ComfyUI</button>
-        <div class="hint" id="workflowHint">The workflows you saved in ComfyUI, which replace Style. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. She only lip-syncs in one with a Load Audio node.</div>
+        <div class="hint" id="workflowHint">The workflows you saved in ComfyUI, which replace Style. She gets her reference image if the workflow takes one, every reference input if it takes several, and none if it only takes text. Each needs a Load Audio node feeding the video, so she can lip-sync.</div>
         <div class="hint"><b>Lip-sync</b>: she says the narration on camera, mouth matched to the voice. <b>Silent reactions</b>: she reacts while the voice plays over her. A static clip just loops <code>assets/avatar/avatars.mp4</code>.</div>
       </div>
     </div>
@@ -355,7 +376,7 @@
   </div>
 </form>
 
-<div class="card run-card">
+<div class="card run-card" id="runCard">
   <div class="btns">
     <button type="button" class="ghost" id="check" title="Verifies keys, ffmpeg and ComfyUI for these options without making anything.">Check setup</button>
     <button type="submit" form="form" id="go">Generate</button>
@@ -403,7 +424,7 @@
   <div class="phone">📱 On your phone (same Wi-Fi): <code>{{ phone_url }}</code></div>
 </div>
 
-<div class="card videos-card">
+<div class="card videos-card" id="videosCard">
   <div class="vhead">
     <div class="tabs">
       <button type="button" id="tabOutput" class="active">Ready (<span id="countOutput">0</span>)</button>
@@ -487,7 +508,7 @@ async function loadWorkflows() {
   const wanted = select.dataset.key ? select.value : rememberedWorkflow();
   select.dataset.key = key;
   const none = !data.online && !data.workflows.length;
-  select.innerHTML = '<option value="">Built-in LTX, by Style</option>' + data.workflows.map(w =>
+  select.innerHTML = '<option value="">LTX-2.3</option>' + data.workflows.map(w =>
     `<option value="${esc(w.name)}" ${w.problem ? 'disabled' : ''}>${esc(w.label)}${w.problem ? " (can't run)" : ''}</option>`).join('')
     + (none ? '<option disabled>Your saved workflows appear once ComfyUI is on</option>' : '');
   if (data.workflows.some(w => w.name === wanted && !w.problem)) select.value = wanted;
@@ -586,6 +607,7 @@ function unclaimedVideos() {
 function renderVideos() {
   const videos = lastVideos[folder] || [];
   $('countOutput').textContent = lastVideos.output.length;
+  $('jumpCount').textContent = lastVideos.output.length;
   $('countUploaded').textContent = lastVideos.uploaded.length;
   $('uploadAll').hidden = folder !== 'output';
   $('uploadAll').disabled = !CAN_UPLOAD || !unclaimedVideos().length;
@@ -754,7 +776,7 @@ function renderPlan() {
   const parts = [];
   if (plan.videos > 1) parts.push(`${plan.videos} videos, ${fmtEta(plan.video)} each`);
   parts.push(plan.clips
-    ? `${plan.clips} avatar ${plan.clips === 1 ? 'clip' : 'clips'} of about ${plan.clip_seconds} s per video, ${fmtEta(plan.clip_render)} each. A clip that fails its check renders again, which adds that time`
+    ? `${plan.clips} avatar ${plan.clips === 1 ? 'clip' : 'clips'} of about ${plan.clip_seconds} s per video, ${fmtEta(plan.clip_render)} each${plan.model ? ` on ${esc(plan.model)}` : ''}${plan.model && !plan.model_timed ? ` (not timed yet, so this is the average of all models until its first clip)` : ''}. A clip that fails its check renders again, which adds that time`
     : 'No avatar clips to render');
   $('estimateDetail').textContent = parts.join(' · ') + '.';
   $('estimateDetail').title = plan.steps.map(s => `${s.name}: ${fmtEta(s.seconds)}`).join('\n');
@@ -974,6 +996,7 @@ async function poll() {
   renderQueue($('runQueue'), queue, queue.held ? 0 : queueAhead);
   renderStopped(data.stopped_runs);
   $('dot').className = 'dot' + (running || nextUp ? ' on' : (data.returncode && !data.stopped ? ' fail' : ''));
+  $('jumpDot').className = $('dot').className;
   $('go').disabled = submitting;
   $('check').hidden = running;
   $('check').disabled = submitting;
@@ -1081,6 +1104,16 @@ $('shutdown').addEventListener('click', async e => {
   if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }
   document.body.innerHTML = '<div class="wrap"><h1>Auto YT Shorts</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>AutoShorts</b> shortcut.</p></div>';
 });
+
+// The section under the phone header, lit up in it.
+const JUMPS = [...$('jump').querySelectorAll('a')];
+function markJump() {
+  const line = $('jump').getBoundingClientRect().bottom + 8;
+  const here = JUMPS.filter(a => $(a.hash.slice(1)).getBoundingClientRect().top <= line).pop() || JUMPS[0];
+  JUMPS.forEach(a => a.classList.toggle('active', a === here));
+}
+window.addEventListener('scroll', markJump, { passive: true });
+markJump();
 
 loadForm();
 syncForm();
